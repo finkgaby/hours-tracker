@@ -1,7 +1,8 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timedelta
+import calendar as cal_lib
 from streamlit_calendar import calendar
 
 # --- הגדרות עמוד ---
@@ -38,8 +39,7 @@ try:
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
         if 'type' not in df.columns:
             df['type'] = 'עבודה'
-        else:
-            df['type'] = df['type'].fillna('עבודה')
+        df['type'] = df['type'].fillna('עבודה')
     else:
         df = pd.DataFrame(columns=["date", "start_time", "end_time", "notes", "type"])
 except Exception as e:
@@ -55,6 +55,36 @@ def float_to_time_str(hours_float):
     res = f"{h}:{m:02d}"
     return f"-{res}" if is_neg else res
 
+def get_target_hours(dt):
+    """מחזיר תקן שעות ליום נתון (dt יכול להיות אובייקט date או datetime)"""
+    wd = dt.weekday()
+    # ב-Python: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    if wd == 3: return 8.5   # חמישי
+    if wd in [4, 5]: return 0.0 # שישי שבת
+    return 9.0               # ראשון עד רביעי
+
+def get_monthly_target_total(year, month):
+    total = 0.0
+    num_days = cal_lib.monthrange(year, month)[1]
+    for day in range(1, num_days + 1):
+        total += get_target_hours(date(year, month, day))
+    return total
+
+def get_weekly_target_total():
+    """מחשב תקן שבועי לשבוע הנוכחי (ראשון עד שבת)"""
+    today = date.today()
+    # מציאת יום ראשון הקרוב ביותר בעבר (או היום אם היום ראשון)
+    # ב-weekday() של Python יום ראשון הוא 6. 
+    # כדי להגיע לראשון: (today.weekday() + 1) % 7
+    days_since_sunday = (today.weekday() + 1) % 7
+    start_of_week = today - timedelta(days=days_since_sunday)
+    
+    total_weekly = 0.0
+    for i in range(7):
+        current_day = start_of_week + timedelta(days=i)
+        total_weekly += get_target_hours(current_day)
+    return total_weekly
+
 def update_google_sheet(new_df):
     try:
         conn.update(worksheet="Sheet1", data=new_df)
@@ -63,117 +93,128 @@ def update_google_sheet(new_df):
         st.rerun()
     except Exception as e: st.error(f"שגיאה בשמירה: {e}")
 
-@st.dialog("⚠️ אישור מחיקה")
-def delete_confirmation_dialog(idx, d_str, s_s, e_s):
-    st.write("### שימי לב!")
-    st.write("את עומדת למחוק את הרשומה:")
-    # הצגת תאריך בפורמט dd/mm/yyyy בדיאלוג
-    fmt_d = datetime.strptime(d_str, '%Y-%m-%d').strftime('%d/%m/%Y')
-    s_clean = ":".join(str(s_s).split(":")[:2]) if pd.notna(s_s) else "00:00"
-    e_clean = ":".join(str(e_s).split(":")[:2]) if pd.notna(e_s) else "00:00"
-    st.markdown(f"**תאריך** {fmt_d}"); st.markdown(f"**שעת כניסה** {s_clean}"); st.markdown(f"**שעת יציאה** {e_clean}")
-    st.write("---"); st.write("**האם את בטוחה?**")
-    c1, c2 = st.columns(2)
-    if c1.button("✅ כן, מחק", type="primary", use_container_width=True, key="dlg_confirm_del"):
-        update_google_sheet(df.drop(idx))
-    if c2.button("❌ לא, בטל", use_container_width=True, key="dlg_cancel_del"): st.rerun()
-
-# --- טאבים ---
+# --- הגדרת הטאבים ---
 tab_stats, tab_report, tab_manage = st.tabs(["📊 סיכומים ולוח שנה", "📝 דיווח חדש", "🛠️ ניהול ועריכה"])
 
+# --- טאב סטטיסטיקה ---
 with tab_stats:
-    if df.empty: st.info("אין נתונים להצגה")
-    else:
-        events, tw, tm = [], 0.0, 0.0
-        now = datetime.now()
-        for _, row in df.iterrows():
-            try:
-                dt = datetime.strptime(row['date'], '%Y-%m-%d')
-                target = 8.5 if dt.weekday() == 3 else (0 if dt.weekday() in [4,5] else 9.0)
-                row_type = row.get('type', 'עבודה')
-                if pd.isna(row_type): row_type = 'עבודה'
+    events, total_done_month = [], 0.0
+    now = datetime.now()
+    monthly_target_total = get_monthly_target_total(now.year, now.month)
+    weekly_target_total = get_weekly_target_total()
+    
+    for _, row in df.iterrows():
+        try:
+            dt = datetime.strptime(row['date'], '%Y-%m-%d')
+            target = get_target_hours(dt)
+            row_type = row.get('type', 'עבודה')
+            if pd.isna(row_type): row_type = 'עבודה'
 
-                if row_type == 'עבודה':
-                    if pd.isna(row['start_time']) or pd.isna(row['end_time']): continue
-                    s = datetime.strptime(f"{row['date']} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
-                    e = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
-                    hrs = (e - s).total_seconds() / 3600
-                    bal = hrs - target
-                    color = "#28a745" if bal >= 0 else "#dc3545"
-                    title = float_to_time_str(hrs)
-                else:
-                    hrs, bal = target, 0
-                    color = "#007bff" if row_type == 'חופשה' else "#fd7e14"
-                    title = row_type
+            if row_type == 'עבודה':
+                if pd.isna(row['start_time']) or pd.isna(row['end_time']): continue
+                s = datetime.strptime(f"{row['date']} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
+                e = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
+                hrs = (e - s).total_seconds() / 3600
+                bal = hrs - target
+                color = "#28a745" if bal >= 0 else "#dc3545"
+                title = float_to_time_str(hrs)
+            elif row_type == 'שבתון':
+                hrs = 0.0
+                color = "#6f42c1"
+                title = "שבתון"
+            else:
+                hrs = target
+                color = "#007bff" if row_type == 'חופשה' else "#fd7e14"
+                title = row_type
 
-                if dt.year == now.year and dt.month == now.month: tm += bal
-                if dt.year == now.year and dt.isocalendar()[1] == now.isocalendar()[1]: tw += bal
-                events.append({"title": title, "start": row['date'], "end": row['date'], "backgroundColor": color, "borderColor": color})
-            except: continue
-        cr, cl = st.columns(2)
-        cr.metric("📅 מאזן שבועי", float_to_time_str(tw))
-        cl.metric("📆 מאזן חודשי", float_to_time_str(tm))
-        st.divider()
-        calendar(events=events, options={"headerToolbar": {"left": "today prev,next", "center": "title", "right": ""}, "initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "height": 650}, key="main_cal_comp")
+            if dt.year == now.year and dt.month == now.month:
+                total_done_month += hrs
+            
+            events.append({"title": title, "start": row['date'], "end": row['date'], "backgroundColor": color, "borderColor": color})
+        except: continue
+    
+    # הצגת המטריקות בראש העמוד
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📋 תקן חודשי", f"{int(monthly_target_total)} ש'")
+    m2.metric("📅 תקן שבועי", f"{weekly_target_total} ש'")
+    m3.metric("✅ בוצע החודש", float_to_time_str(total_done_month))
+    m4.metric("⏳ נותר לחודש", float_to_time_str(max(0, monthly_target_total - total_done_month)))
+    
+    st.divider()
+    calendar(events=events, options={"headerToolbar": {"left": "today prev,next", "center": "title", "right": ""}, "initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "height": 650}, key="main_cal")
 
+# --- טאב דיווח ---
 with tab_report:
-    # שינוי פורמט התצוגה בדיווח חדש
-    d = st.date_input("תאריך", date.today(), format="DD/MM/YYYY", key="rep_date_input")
-    report_type = st.radio("סוג דיווח", ["עבודה", "חופשה", "מחלה"], horizontal=True, key="rep_type_radio")
+    d = st.date_input("תאריך", date.today(), format="DD/MM/YYYY", key="rep_date")
+    rtype = st.radio("סוג דיווח", ["עבודה", "חופשה", "מחלה", "שבתון"], horizontal=True, key="rep_type")
     
-    if report_type == "עבודה":
+    ci, co = "00:00:00", "00:00:00"
+    if rtype == "עבודה":
         c1, c2 = st.columns(2)
-        ci = c1.time_input("כניסה", time(6,30), key="rep_time_in")
-        co = c2.time_input("יציאה", time(15,30), key="rep_time_out")
-        st.caption(f"תקן ליום זה: {8.5 if d.weekday() == 3 else (0 if d.weekday() in [4,5] else 9.0)}")
-    else:
-        st.info(f"דיווח {report_type} יחשב כיום עבודה מלא לפי התקן.")
-        ci, co = "00:00:00", "00:00:00"
-
-    notes = st.text_input("הערות", key="rep_notes_input")
+        ci = c1.time_input("כניסה", time(6,30), key="rep_in")
+        co = c2.time_input("יציאה", time(15,30), key="rep_out")
     
-    if st.button("שמור דיווח", type="primary", use_container_width=True, key="rep_save_btn"):
-        new_row = pd.DataFrame([{"date": str(d), "start_time": str(ci), "end_time": str(co), "notes": notes, "type": report_type}])
+    notes = st.text_input("הערות", key="rep_notes")
+    if st.button("שמור דיווח", type="primary", use_container_width=True):
+        new_row = pd.DataFrame([{"date": str(d), "start_time": str(ci), "end_time": str(co), "notes": notes, "type": rtype}])
         update_google_sheet(pd.concat([df, new_row], ignore_index=True))
 
+# --- טאב ניהול ---
 with tab_manage:
     if df.empty: st.info("אין נתונים")
     else:
-        # שינוי פורמט התצוגה בבחירת תאריך לעריכה (Selectbox)
         dates_list = sorted(df['date'].unique(), reverse=True)
-        # פונקציה להצגת התאריך בפורמט dd/mm/yyyy ברשימה
-        def format_date_selectbox(d_str):
-            return datetime.strptime(d_str, '%Y-%m-%d').strftime('%d/%m/%Y')
-
-        sel_d = st.selectbox("בחר תאריך לעריכה", dates_list, format_func=format_date_selectbox, key="man_date_sel")
+        sel_d = st.selectbox(
+            "בחר תאריך לעריכה", 
+            dates_list, 
+            format_func=lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y'), 
+            key="man_date"
+        )
         
         d_rows = df[df['date'] == sel_d].reset_index()
         
-        def format_row_option(x):
-            row = d_rows.iloc[x]
-            t_type = row.get('type', 'עבודה')
-            if t_type == 'עבודה':
-                start_clean = ":".join(str(row['start_time']).split(":")[:2])
-                return f"עבודה | {start_clean}"
-            return t_type
-
-        sel_idx = st.selectbox("בחר רשומה", d_rows.index, format_func=format_row_option, key="man_row_sel")
+        def format_row(x):
+            r = d_rows.iloc[x]
+            if r['type'] == 'עבודה':
+                clean_time = ":".join(str(r['start_time']).split(":")[:2])
+                return f"עבודה | {clean_time}"
+            return str(r['type'])
+            
+        sel_idx = st.selectbox("בחר רשומה לעריכה", d_rows.index, format_func=format_row, key="man_row")
         curr = d_rows.iloc[sel_idx]
         
-        with st.expander("עריכה / מחיקה", expanded=True):
-            # שינוי פורמט בתוך האקספנדר (אם תבחר לשים שם date_input נוסף בעתיד)
-            options = ["עבודה", "חופשה", "מחלה"]
-            curr_type = curr.get('type', 'עבודה')
-            if curr_type not in options: curr_type = "עבודה"
+        with st.expander("שינוי פרטים / מחיקה", expanded=True):
+            options = ["עבודה", "חופשה", "מחלה", "שבתון"]
+            curr_t = curr['type'] if curr['type'] in options else "עבודה"
             
-            new_type = st.radio("סוג יום", options, index=options.index(curr_type), key="man_edit_type")
-            new_n = st.text_input("הערות", "" if pd.isna(curr['notes']) else curr['notes'], key="man_edit_notes")
+            new_type = st.radio(
+                "סוג דיווח:", 
+                options, 
+                index=options.index(curr_t), 
+                key=f"edit_type_{sel_d}_{sel_idx}"
+            )
             
+            edit_ci, edit_co = str(curr['start_time']), str(curr['end_time'])
+            
+            if new_type == "עבודה":
+                c1, c2 = st.columns(2)
+                try:
+                    ti = datetime.strptime(str(curr['start_time']), "%H:%M:%S").time()
+                    to = datetime.strptime(str(curr['end_time']), "%H:%M:%S").time()
+                except: ti, to = time(6,30), time(15,30)
+                
+                edit_ci = c1.time_input("כניסה מעודכנת", ti, key=f"edit_in_{sel_d}_{sel_idx}")
+                edit_co = c2.time_input("יציאה מעודכנת", to, key=f"edit_out_{sel_d}_{sel_idx}")
+            else:
+                edit_ci, edit_co = "00:00:00", "00:00:00"
+            
+            new_n = st.text_input("הערות", "" if pd.isna(curr['notes']) else curr['notes'], key=f"edit_notes_{sel_d}_{sel_idx}")
+            
+            st.divider()
             b1, b2 = st.columns(2)
-            if b1.button("💾 עדכן", use_container_width=True, key="man_update_btn"):
-                df.loc[curr['index'], 'type'] = new_type
-                df.loc[curr['index'], 'notes'] = new_n
+            if b1.button("💾 עדכן שינויים", use_container_width=True, key=f"btn_upd_{sel_d}_{sel_idx}"):
+                df.loc[curr['index'], ['type', 'start_time', 'end_time', 'notes']] = [new_type, str(edit_ci), str(edit_co), new_n]
                 update_google_sheet(df)
             
-            if b2.button("🗑️ מחק רשומה", type="secondary", use_container_width=True, key="man_delete_btn"):
-                delete_confirmation_dialog(curr['index'], sel_d, curr['start_time'], curr['end_time'])
+            if b2.button("🗑️ מחק רשומה", type="secondary", use_container_width=True, key=f"btn_del_{sel_d}_{sel_idx}"):
+                update_google_sheet(df.drop(curr['index']))
