@@ -70,6 +70,17 @@ st.markdown("""
         direction: rtl;
     }
     
+    /* עיצוב כפתור מחיקה שיהיה אדום כשפעיל */
+    div[data-testid="stButton"] button[kind="secondary"] {
+        border-color: #ff4b4b;
+        color: #ff4b4b;
+    }
+    div[data-testid="stButton"] button[kind="secondary"]:hover {
+        border-color: #ff4b4b;
+        background-color: #ff4b4b;
+        color: white;
+    }
+    
     /* כפתורים בחלון דיאלוג */
     div[data-testid="stDialog"] button {
         width: 100%;
@@ -170,7 +181,6 @@ def delete_confirmation_dialog(index_to_delete, date_str, start_s, end_s):
     st.write("### שימי לב!")
     st.write("את עומדת למחוק את הרשומה שבחרת:")
     
-    # המרת תאריך לפורמט ישראלי להצגה
     fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
     
     st.markdown(f"**תאריך:** {fmt_date}")
@@ -381,11 +391,14 @@ with tab_manage:
                 with ec_out:
                     new_out = st.time_input("יציאה", t_e, key="edit_out")
                     
-                new_n = st.text_input("הערות", curr_row['notes'], key="edit_note")
+                # תיקון: טיפול בערכי NaN כדי שלא יופיע "nan"
+                note_value = curr_row['notes']
+                if pd.isna(note_value) or str(note_value).lower() == 'nan':
+                    note_value = ""
+                new_n = st.text_input("הערות", note_value, key="edit_note")
                 
-                st.write("---") # קו מפריד
+                st.write("---")
                 
-                # כפתורי פעולה: עדכון ומחיקה
                 col_btn_update, col_btn_delete = st.columns([1, 1])
                 
                 with col_btn_update:
@@ -407,6 +420,5 @@ with tab_manage:
                                 update_google_sheet(new_df)
                 
                 with col_btn_delete:
-                    # שינוי: במקום צ'ק בוקס, קריאה לדיאלוג
                     if st.button("🗑️ מחק רשומה", type="secondary", use_container_width=True):
                         delete_confirmation_dialog(original_index, sel_date, str(curr_row['start_time']), str(curr_row['end_time']))
