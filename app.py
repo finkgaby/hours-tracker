@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, time, timedelta, date
 
 # --- הגדרות עמוד ותמיכה בעברית ---
-st.set_page_config(page_title="דיווח שעות - גבי", page_icon="⏱️", layout="centered")
+st.set_page_config(page_title="דיווח שעות - יאנה", page_icon="⏱️", layout="centered")
 
 # הזרקת CSS ליישור לימין (RTL)
 st.markdown("""
@@ -101,11 +101,13 @@ with tab_report:
 
     t_clock, t_type = st.tabs(["⏰ שעון", "⌨️ הקלדה"])
     with t_clock:
-        c_start = st.time_input("כניסה", time(9, 0), step=60, key="c_s")
-        c_end = st.time_input("יציאה", time(18, 0), step=60, key="c_e")
+        # שינוי: ברירת מחדל 06:30 ו-15:30
+        c_start = st.time_input("כניסה", time(6, 30), step=60, key="c_s")
+        c_end = st.time_input("יציאה", time(15, 30), step=60, key="c_e")
     with t_type:
-        m_start = st.text_input("כניסה (0900)", value="09:00", key="m_s")
-        m_end = st.text_input("יציאה (1800)", value="18:00", key="m_e")
+        # שינוי: ערך התחלתי 06:30 ו-15:30
+        m_start = st.text_input("כניסה (0630)", value="06:30", key="m_s")
+        m_end = st.text_input("יציאה (1530)", value="15:30", key="m_e")
     
     notes = st.text_input("הערות")
 
@@ -129,27 +131,20 @@ with tab_manage:
     if df.empty:
         st.info("אין נתונים.")
     else:
-        # יצירת רשימה יפה לבחירה עם ימים בעברית
         df_temp = df.copy()
         df_temp['date_obj'] = pd.to_datetime(df_temp['date'])
         
-        # שינוי תצוגה גם כאן לפורמט ישראלי: DD/MM/YYYY
         df_temp['formatted_date'] = df_temp['date_obj'].dt.strftime('%d/%m/%Y')
         
-        # יצירת עמודת תצוגה משולבת
         df_temp['display'] = df_temp.apply(
             lambda x: f"{x['formatted_date']} ({get_hebrew_day(x['date_obj'])})", axis=1
         )
-        # מיון לפי תאריך
         df_temp = df_temp.sort_values('date_obj', ascending=False)
         
-        # בחירה מתוך הרשימה המעוצבת
         selected_display = st.selectbox("בחר תאריך לעריכה:", df_temp['display'].unique())
         
-        # כדי למצוא את השורה המקורית, אנחנו צריכים לחלץ את התאריך ולמצוא אותו בדאטה המקורי
-        # נשתמש באינדקס של השורה שנבחרה כדי למצוא את התאריך המקורי (YYYY-MM-DD)
         selected_index = df_temp[df_temp['display'] == selected_display].index[0]
-        selected_date_str = df_temp.loc[selected_index, 'date'] # התאריך המקורי
+        selected_date_str = df_temp.loc[selected_index, 'date']
         
         current_row = df[df['date'] == selected_date_str].iloc[0]
         
@@ -159,7 +154,8 @@ with tab_manage:
                 t_s = datetime.strptime(current_row['start_time'], "%H:%M:%S").time()
                 t_e = datetime.strptime(current_row['end_time'], "%H:%M:%S").time()
             except:
-                t_s, t_e = time(9,0), time(18,0)
+                # גם כאן עדכנתי את ברירת המחדל למקרה של שגיאה
+                t_s, t_e = time(6,30), time(15,30)
 
             new_start = edit_col1.time_input("שינוי כניסה", t_s, step=60)
             new_end = edit_col2.time_input("שינוי יציאה", t_e, step=60)
@@ -178,16 +174,12 @@ with tab_manage:
                 final_df = pd.concat([final_df, updated_row], ignore_index=True)
                 update_google_sheet(final_df)
 
-            # כפתור המחיקה בוטל
-            # if col_del.button("🗑️ מחק", type="primary", use_container_width=True): ...
-
 # --- לשונית 3: סיכומים ---
 with tab_stats:
     if not df.empty:
         calc_df = df.copy()
         calc_df['date_obj'] = pd.to_datetime(calc_df['date'])
         
-        # הוספת עמודת יום בשבוע
         calc_df['day_name'] = calc_df['date_obj'].apply(get_hebrew_day)
 
         def get_hours(row):
@@ -236,10 +228,8 @@ with tab_stats:
         st.subheader("היסטוריה")
         display_df = calc_df.sort_values('date_obj', ascending=False)
         
-        # --- השינוי המרכזי: יצירת תאריך מעוצב להצגה ---
         display_df['formatted_date'] = display_df['date_obj'].dt.strftime('%d/%m/%Y')
         
-        # סידור העמודות לתצוגה
         final_view = display_df[[
             'formatted_date', 'day_name', 'start_time', 'end_time', 
             'hours_worked', 'target', 'delta', 'notes'
