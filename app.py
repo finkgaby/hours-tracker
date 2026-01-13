@@ -132,9 +132,13 @@ with tab_manage:
         # יצירת רשימה יפה לבחירה עם ימים בעברית
         df_temp = df.copy()
         df_temp['date_obj'] = pd.to_datetime(df_temp['date'])
-        # יצירת עמודת תצוגה: "2024-01-01 (יום ב')"
+        
+        # שינוי תצוגה גם כאן לפורמט ישראלי: DD/MM/YYYY
+        df_temp['formatted_date'] = df_temp['date_obj'].dt.strftime('%d/%m/%Y')
+        
+        # יצירת עמודת תצוגה משולבת
         df_temp['display'] = df_temp.apply(
-            lambda x: f"{x['date']} ({get_hebrew_day(x['date_obj'])})", axis=1
+            lambda x: f"{x['formatted_date']} ({get_hebrew_day(x['date_obj'])})", axis=1
         )
         # מיון לפי תאריך
         df_temp = df_temp.sort_values('date_obj', ascending=False)
@@ -142,8 +146,10 @@ with tab_manage:
         # בחירה מתוך הרשימה המעוצבת
         selected_display = st.selectbox("בחר תאריך לעריכה:", df_temp['display'].unique())
         
-        # חילוץ התאריך המקורי מתוך התצוגה (החלק לפני הרווח הראשון)
-        selected_date_str = selected_display.split(" ")[0]
+        # כדי למצוא את השורה המקורית, אנחנו צריכים לחלץ את התאריך ולמצוא אותו בדאטה המקורי
+        # נשתמש באינדקס של השורה שנבחרה כדי למצוא את התאריך המקורי (YYYY-MM-DD)
+        selected_index = df_temp[df_temp['display'] == selected_display].index[0]
+        selected_date_str = df_temp.loc[selected_index, 'date'] # התאריך המקורי
         
         current_row = df[df['date'] == selected_date_str].iloc[0]
         
@@ -159,7 +165,6 @@ with tab_manage:
             new_end = edit_col2.time_input("שינוי יציאה", t_e, step=60)
             new_notes = st.text_input("שינוי הערות", current_row['notes'])
             
-            # --- שינוי: ביטול כפתור מחיקה ---
             col_save, col_del = st.columns([3, 1])
             
             if col_save.button("עדכן", use_container_width=True):
@@ -169,15 +174,12 @@ with tab_manage:
                     "end_time": str(new_end),
                     "notes": new_notes
                 }])
-                # הסרת הישן והוספת החדש
                 final_df = df[df['date'] != selected_date_str]
                 final_df = pd.concat([final_df, updated_row], ignore_index=True)
                 update_google_sheet(final_df)
 
-            # כפתור המחיקה בוטל כדי למנוע באגים בחישוב
-            # if col_del.button("🗑️ מחק", type="primary", use_container_width=True):
-            #     final_df = df[df['date'] != selected_date_str]
-            #     update_google_sheet(final_df)
+            # כפתור המחיקה בוטל
+            # if col_del.button("🗑️ מחק", type="primary", use_container_width=True): ...
 
 # --- לשונית 3: סיכומים ---
 with tab_stats:
@@ -185,7 +187,7 @@ with tab_stats:
         calc_df = df.copy()
         calc_df['date_obj'] = pd.to_datetime(calc_df['date'])
         
-        # הוספת עמודת יום בשבוע לחישובים ולתצוגה
+        # הוספת עמודת יום בשבוע
         calc_df['day_name'] = calc_df['date_obj'].apply(get_hebrew_day)
 
         def get_hours(row):
@@ -201,7 +203,6 @@ with tab_stats:
         
         st.subheader("📊 סיכום נתונים")
         
-        # --- חישובים ---
         now = datetime.now()
         
         # 1. שבועי
@@ -214,7 +215,6 @@ with tab_stats:
             (calc_df['date_obj'].dt.year == now.year)
         ]
 
-        # --- תצוגה בשתי עמודות ---
         col_week, col_month = st.columns(2)
         
         with col_week:
@@ -233,16 +233,18 @@ with tab_stats:
 
         st.divider()
 
-        # טבלה היסטורית
         st.subheader("היסטוריה")
         display_df = calc_df.sort_values('date_obj', ascending=False)
         
-        # סידור העמודות לתצוגה יפה
+        # --- השינוי המרכזי: יצירת תאריך מעוצב להצגה ---
+        display_df['formatted_date'] = display_df['date_obj'].dt.strftime('%d/%m/%Y')
+        
+        # סידור העמודות לתצוגה
         final_view = display_df[[
-            'date', 'day_name', 'start_time', 'end_time', 
+            'formatted_date', 'day_name', 'start_time', 'end_time', 
             'hours_worked', 'target', 'delta', 'notes'
         ]].rename(columns={
-            'date': 'תאריך', 
+            'formatted_date': 'תאריך', 
             'day_name': 'יום', 
             'start_time': 'כניסה', 
             'end_time': 'יציאה', 
