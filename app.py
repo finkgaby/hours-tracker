@@ -183,9 +183,14 @@ def delete_confirmation_dialog(index_to_delete, date_str, start_s, end_s):
     
     fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
     
-    st.markdown(f"**תאריך:** {fmt_date}")
-    st.markdown(f"**שעת כניסה:** {start_s[:5]}")
-    st.markdown(f"**שעת יציאה:** {end_s[:5]}")
+    # תיקון: פירוק השעה והרכבה מחדש ללא תווים מיותרים
+    # לוקחים את החלקים לפני ואחרי הנקודותיים הראשונים בלבד
+    s_time_clean = ":".join(str(start_s).split(":")[:2])
+    e_time_clean = ":".join(str(end_s).split(":")[:2])
+    
+    st.markdown(f"**תאריך** {fmt_date}")
+    st.markdown(f"**שעת כניסה** {s_time_clean}")
+    st.markdown(f"**שעת יציאה** {e_time_clean}")
     
     st.write("---")
     st.write("**האם את בטוחה שאת רוצה להמשיך?**")
@@ -243,7 +248,7 @@ with tab_stats:
                     "start": row['date'],
                     "end": row['date'],
                     "backgroundColor": bg_color,
-                    "borderColor": bg_color
+                    "borderColor": bg_color,
                 })
             except:
                 continue
@@ -391,7 +396,6 @@ with tab_manage:
                 with ec_out:
                     new_out = st.time_input("יציאה", t_e, key="edit_out")
                     
-                # תיקון: טיפול בערכי NaN כדי שלא יופיע "nan"
                 note_value = curr_row['notes']
                 if pd.isna(note_value) or str(note_value).lower() == 'nan':
                     note_value = ""
