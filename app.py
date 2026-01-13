@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, time, timedelta, date
 
 # --- הגדרות עמוד ותמיכה בעברית ---
-st.set_page_config(page_title="דיווח שעות - יאנה", page_icon="⏱️", layout="centered")
+st.set_page_config(page_title="דיווח שעות - גבי", page_icon="⏱️", layout="centered")
 
 # הזרקת CSS ליישור לימין (RTL)
 st.markdown("""
@@ -13,7 +13,7 @@ st.markdown("""
         direction: rtl;
         text-align: right;
     }
-    .stMarkdown, .stText, .stHeader, .stMetricLabel, .stCaption {
+    .stMarkdown, .stText, .stHeader, .stMetricLabel, .stCaption, .stAlert {
         text-align: right !important;
     }
     div[data-testid="stMetricValue"] {
@@ -89,11 +89,22 @@ tab_report, tab_manage, tab_stats = st.tabs(["📝 דיווח חדש", "🛠️ 
 with tab_report:
     st.caption("הזנת דיווח יומי")
     col_d1, col_d2 = st.columns([2, 1])
+    
     with col_d1:
         input_date = st.date_input("תאריך", datetime.now())
-        # הצגת היום הנבחר בצורה ויזואלית
         st.caption(f"📅 {get_hebrew_day(input_date)}")
     
+    # --- הוספת תצוגת תקן יומית ---
+    with col_d2:
+        wd = input_date.weekday()
+        # בדיקה אם סופ"ש (שישי=4, שבת=5)
+        if wd == 4 or wd == 5:
+            st.warning("⚠️ שימי לב, בחרת יום בסופ\"ש שאינו יום עבודה")
+        else:
+            # בדיקת תקן (יום ה' = 3 -> 8.5, כל השאר 9.0)
+            target = 8.5 if wd == 3 else 9.0
+            st.info(f"📌 תקן ליום זה:\n**{target} שעות**")
+
     date_exists = False
     if not df.empty and str(input_date) in df['date'].values:
         date_exists = True
@@ -101,11 +112,9 @@ with tab_report:
 
     t_clock, t_type = st.tabs(["⏰ שעון", "⌨️ הקלדה"])
     with t_clock:
-        # שינוי: ברירת מחדל 06:30 ו-15:30
         c_start = st.time_input("כניסה", time(6, 30), step=60, key="c_s")
         c_end = st.time_input("יציאה", time(15, 30), step=60, key="c_e")
     with t_type:
-        # שינוי: ערך התחלתי 06:30 ו-15:30
         m_start = st.text_input("כניסה (0630)", value="06:30", key="m_s")
         m_end = st.text_input("יציאה (1530)", value="15:30", key="m_e")
     
@@ -154,7 +163,6 @@ with tab_manage:
                 t_s = datetime.strptime(current_row['start_time'], "%H:%M:%S").time()
                 t_e = datetime.strptime(current_row['end_time'], "%H:%M:%S").time()
             except:
-                # גם כאן עדכנתי את ברירת המחדל למקרה של שגיאה
                 t_s, t_e = time(6,30), time(15,30)
 
             new_start = edit_col1.time_input("שינוי כניסה", t_s, step=60)
