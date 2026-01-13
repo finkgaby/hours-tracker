@@ -1,10 +1,36 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, date
 
-# --- הגדרות עמוד ---
+# --- הגדרות עמוד ותמיכה בעברית ---
 st.set_page_config(page_title="דיווח שעות - גבי", page_icon="⏱️", layout="centered")
+
+# הזרקת CSS ליישור לימין (RTL)
+st.markdown("""
+<style>
+    .stApp {
+        direction: rtl;
+        text-align: right;
+    }
+    .stMarkdown, .stText, .stHeader, .stMetricLabel, .stCaption {
+        text-align: right !important;
+    }
+    div[data-testid="stMetricValue"] {
+        direction: ltr; 
+        text-align: right;
+    }
+    /* התאמה לטבלה */
+    div[data-testid="stDataFrame"] {
+        direction: ltr; 
+    }
+    /* התאמה לטאבים */
+    .stTabs [data-baseweb="tab-list"] {
+        justify-content: flex-end;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("⏱️ מערכת דיווח שעות")
 
 # --- חיבור לגוגל שיטס ---
@@ -99,7 +125,7 @@ with tab_report:
 
 # --- לשונית 2: ניהול ועריכה ---
 with tab_manage:
-    st.caption("עריכה או מחיקה")
+    st.caption("עריכה (אפשרות המחיקה בוטלה זמנית)")
     if df.empty:
         st.info("אין נתונים.")
     else:
@@ -133,6 +159,7 @@ with tab_manage:
             new_end = edit_col2.time_input("שינוי יציאה", t_e, step=60)
             new_notes = st.text_input("שינוי הערות", current_row['notes'])
             
+            # --- שינוי: ביטול כפתור מחיקה ---
             col_save, col_del = st.columns([3, 1])
             
             if col_save.button("עדכן", use_container_width=True):
@@ -147,9 +174,10 @@ with tab_manage:
                 final_df = pd.concat([final_df, updated_row], ignore_index=True)
                 update_google_sheet(final_df)
 
-            if col_del.button("🗑️ מחק", type="primary", use_container_width=True):
-                final_df = df[df['date'] != selected_date_str]
-                update_google_sheet(final_df)
+            # כפתור המחיקה בוטל כדי למנוע באגים בחישוב
+            # if col_del.button("🗑️ מחק", type="primary", use_container_width=True):
+            #     final_df = df[df['date'] != selected_date_str]
+            #     update_google_sheet(final_df)
 
 # --- לשונית 3: סיכומים ---
 with tab_stats:
@@ -171,15 +199,37 @@ with tab_stats:
         calc_df['target'] = calc_df['date_obj'].apply(calculate_target_hours)
         calc_df['delta'] = calc_df['hours_worked'] - calc_df['target']
         
-        # סיכום שבועי
-        st.subheader("📅 סיכום שבועי")
-        current_iso_week = datetime.now().isocalendar()[1]
+        st.subheader("📊 סיכום נתונים")
+        
+        # --- חישובים ---
+        now = datetime.now()
+        
+        # 1. שבועי
+        current_iso_week = now.isocalendar()[1]
         weekly_df = calc_df[calc_df['date_obj'].dt.isocalendar().week == current_iso_week]
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("סה\"כ שעות", f"{weekly_df['hours_worked'].sum():.2f}")
-        c2.metric("תקן", f"{weekly_df['target'].sum():.2f}")
-        c3.metric("מאזן", f"{weekly_df['delta'].sum():.2f}", delta_color="normal")
+        # 2. חודשי
+        monthly_df = calc_df[
+            (calc_df['date_obj'].dt.month == now.month) & 
+            (calc_df['date_obj'].dt.year == now.year)
+        ]
+
+        # --- תצוגה בשתי עמודות ---
+        col_week, col_month = st.columns(2)
+        
+        with col_week:
+            st.markdown("##### 📅 שבוע נוכחי")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("סה\"כ", f"{weekly_df['hours_worked'].sum():.2f}")
+            c2.metric("תקן", f"{weekly_df['target'].sum():.2f}")
+            c3.metric("מאזן", f"{weekly_df['delta'].sum():.2f}", delta_color="normal")
+            
+        with col_month:
+            st.markdown("##### 📆 חודש נוכחי")
+            c4, c5, c6 = st.columns(3)
+            c4.metric("סה\"כ", f"{monthly_df['hours_worked'].sum():.2f}")
+            c5.metric("תקן", f"{monthly_df['target'].sum():.2f}")
+            c6.metric("מאזן", f"{monthly_df['delta'].sum():.2f}", delta_color="normal")
 
         st.divider()
 
@@ -209,7 +259,7 @@ with tab_stats:
         st.dataframe(
             final_view.style.map(color_delta, subset=['הפרש']).format("{:.2f}", subset=['בפועל', 'תקן', 'הפרש']),
             use_container_width=True,
-            hide_index=True  # הסתרת המספור בצד שמאל
+            hide_index=True
         )
     else:
         st.info("אין נתונים להצגה")
