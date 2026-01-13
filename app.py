@@ -69,6 +69,11 @@ st.markdown("""
     div[data-testid="stDataFrame"] {
         direction: rtl;
     }
+    
+    /* כפתורים בחלון דיאלוג */
+    div[data-testid="stDialog"] button {
+        width: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -96,7 +101,6 @@ def get_hebrew_day(py_date):
     return f"יום {days[py_date.weekday()]}"
 
 def parse_time_input(time_str):
-    """מנסה לפענח מחרוזת זמן ומחזיר אובייקט time או None אם נכשל"""
     if not time_str:
         return None
     try:
@@ -104,7 +108,6 @@ def parse_time_input(time_str):
         if len(clean_str) <= 2: clean_str += "00"
         if len(clean_str) == 3: clean_str = "0" + clean_str
         if len(clean_str) == 4:
-            # בדיקת תקינות שעות ודקות (למרות ש-strptime עושה את זה, נוודא ליתר ביטחון)
             h = int(clean_str[:2])
             m = int(clean_str[2:])
             if h > 23 or m > 59:
@@ -128,16 +131,13 @@ def float_to_time_str(hours_float):
     return time_str
 
 def check_overlap(df, check_date, start_t, end_t):
-    """בודק אם קיים דיווח חופף באותו התאריך"""
     if df.empty:
         return False
         
-    # סינון לרשומות של אותו היום בלבד
     day_records = df[df['date'] == str(check_date)]
     if day_records.empty:
         return False
 
-    # המרה ל-datetime מלא לצורך השוואה קלה
     new_start = datetime.combine(date.min, start_t)
     new_end = datetime.combine(date.min, end_t)
 
@@ -149,22 +149,48 @@ def check_overlap(df, check_date, start_t, end_t):
             curr_start = datetime.combine(date.min, exist_s)
             curr_end = datetime.combine(date.min, exist_e)
 
-            # בדיקת חפיפה: (StartA < EndB) וגם (EndA > StartB)
             if new_start < curr_end and new_end > curr_start:
                 return True
         except:
             continue
-            
     return False
 
 def update_google_sheet(new_df):
     try:
         conn.update(worksheet="Sheet1", data=new_df)
         st.cache_data.clear()
-        st.success("הדיווח נשמר בהצלחה! ✅")
+        st.success("השינויים נשמרו בהצלחה! ✅")
         st.rerun()
     except Exception as e:
         st.error(f"שגיאה בשמירה: {e}")
+
+# --- פונקציית דיאלוג למחיקה ---
+@st.dialog("⚠️ אישור מחיקה")
+def delete_confirmation_dialog(index_to_delete, date_str, start_s, end_s):
+    st.write("### שימי לב!")
+    st.write("את עומדת למחוק את הרשומה שבחרת:")
+    
+    # המרת תאריך לפורמט ישראלי להצגה
+    fmt_date = datetime.strptime(date_str, '%Y-%m-%d').strftime('%d/%m/%Y')
+    
+    st.markdown(f"**תאריך:** {fmt_date}")
+    st.markdown(f"**שעת כניסה:** {start_s[:5]}")
+    st.markdown(f"**שעת יציאה:** {end_s[:5]}")
+    
+    st.write("---")
+    st.write("**האם את בטוחה שאת רוצה להמשיך?**")
+    
+    col_yes, col_no = st.columns(2)
+    
+    with col_yes:
+        if st.button("✅ כן, מחק", type="primary", use_container_width=True):
+            new_df = df.drop(index_to_delete)
+            update_google_sheet(new_df)
+            st.rerun()
+            
+    with col_no:
+        if st.button("❌ לא, בטל", use_container_width=True):
+            st.rerun()
 
 # --- הגדרת הטאבים ---
 tab_stats, tab_report, tab_manage = st.tabs(["📊 סיכומים ולוח שנה", "📝 דיווח חדש", "🛠️ ניהול ועריכה"])
@@ -264,9 +290,8 @@ with tab_report:
             target = 8.5 if wd == 3 else 9.0
             st.info(f"תקן: {target}")
             
-    # בדיקה אם קיים דיווח באותו יום (למידע בלבד, לא חוסם)
     if not df.empty and str(d) in df['date'].values:
-        st.info(f"💡 שים לב: כבר קיימים דיווחים לתאריך זה. ניתן להוסיף רשומות נוספות (ללא חפיפה).")
+        st.info(f"💡 שים לב: כבר קיימים דיווחים לתאריך זה.")
 
     t1, t2 = st.tabs(["שעון", "הקלדה"])
     with t1:
@@ -285,48 +310,38 @@ with tab_report:
     
     notes = st.text_input("הערות")
     
-    # כפתור השמירה (פתוח תמיד, הוולידציה תתבצע בלחיצה)
     if st.button("שמור דיווח", type="primary", use_container_width=True):
         final_start = None
         final_end = None
         
-        # --- שלב הוולידציה ---
-        
-        # 1. בדיקה אם המשתמש מנסה להקליד ידנית
         is_manual_entry = (s_in.strip() != "") or (s_out.strip() != "")
         
         if is_manual_entry:
-            # ולידציה להקלדה: חובה למלא את שניהם
             if not s_in.strip() or not s_out.strip():
                 st.error("⚠️ שגיאה: בהקלדה ידנית חובה למלא גם שעת כניסה וגם שעת יציאה.")
                 st.stop()
             
-            # ולידציה להקלדה: פורמט תקין
             parsed_start = parse_time_input(s_in)
             parsed_end = parse_time_input(s_out)
             
             if parsed_start is None or parsed_end is None:
-                st.error("⚠️ שגיאה: השעות שהוקלדו אינן תקינות. יש להשתמש בפורמט 24 שעות (למשל 0800 או 1630).")
+                st.error("⚠️ שגיאה: השעות שהוקלדו אינן תקינות.")
                 st.stop()
                 
             final_start = parsed_start
             final_end = parsed_end
         else:
-            # שימוש בשעונים
             final_start = c_in
             final_end = c_out
 
-        # 2. ולידציה: כניסה קטנה מיציאה
         if final_start >= final_end:
             st.error("⚠️ שגיאה: שעת הכניסה חייבת להיות מוקדמת משעת היציאה.")
             st.stop()
 
-        # 3. ולידציה: חפיפת שעות
         if check_overlap(df, d, final_start, final_end):
-            st.error(f"⚠️ שגיאה: השעות שהוזנו ({final_start.strftime('%H:%M')} - {final_end.strftime('%H:%M')}) חופפות לרשומה קיימת בתאריך {d}.")
+            st.error(f"⚠️ שגיאה: חפיפת שעות עם רשומה קיימת.")
             st.stop()
 
-        # שמירה אם הכל תקין
         new_row = pd.DataFrame([{
             "date": str(d),
             "start_time": str(final_start),
@@ -336,7 +351,7 @@ with tab_report:
         new_df = pd.concat([df, new_row], ignore_index=True)
         update_google_sheet(new_df)
 
-# --- טאב 3: ניהול ---
+# --- טאב 3: ניהול ועריכה ---
 with tab_manage:
     if df.empty:
         st.info("אין נתונים לעריכה")
@@ -344,16 +359,14 @@ with tab_manage:
         dates_list = sorted(df['date'].unique(), reverse=True)
         sel_date = st.selectbox("בחר תאריך לעריכה", dates_list)
         
-        # בחירה מתוך רשימת הדיווחים באותו יום (במקרה של פיצול)
         daily_rows = df[df['date'] == sel_date].reset_index()
         
         if len(daily_rows) > 0:
-            # יצירת תווית בחירה שמראה את השעות
             options = {i: f"{r['start_time'][:5]} - {r['end_time'][:5]} ({r['notes']})" for i, r in daily_rows.iterrows()}
-            selected_idx = st.selectbox("בחר רשומה לעריכה:", options.keys(), format_func=lambda x: options[x])
+            selected_idx = st.selectbox("בחר רשומה:", options.keys(), format_func=lambda x: options[x])
             
             curr_row = daily_rows.iloc[selected_idx]
-            original_index = curr_row['index'] # המזהה המקורי בדאטה-פריים
+            original_index = curr_row['index']
             
             try:
                 t_s = datetime.strptime(str(curr_row['start_time']), "%H:%M:%S").time()
@@ -361,28 +374,28 @@ with tab_manage:
             except:
                 t_s, t_e = time(6,30), time(15,30)
                 
-            with st.expander("עריכת פרטים", expanded=True):
+            with st.expander("עריכת פרטים / מחיקה", expanded=True):
                 ec_in, ec_out = st.columns(2)
                 with ec_in:
-                    new_in = st.time_input("כניסה (התחלה)", t_s, key="edit_in")
+                    new_in = st.time_input("כניסה", t_s, key="edit_in")
                 with ec_out:
-                    new_out = st.time_input("יציאה (סיום)", t_e, key="edit_out")
+                    new_out = st.time_input("יציאה", t_e, key="edit_out")
                     
                 new_n = st.text_input("הערות", curr_row['notes'], key="edit_note")
                 
-                col_upd, col_del = st.columns([1,1])
-                with col_upd:
-                    if st.button("עדכן רשומה", key="btn_update", use_container_width=True):
-                        # ולידציה בסיסית בעריכה
+                st.write("---") # קו מפריד
+                
+                # כפתורי פעולה: עדכון ומחיקה
+                col_btn_update, col_btn_delete = st.columns([1, 1])
+                
+                with col_btn_update:
+                    if st.button("💾 עדכן רשומה", use_container_width=True):
                         if new_in >= new_out:
-                            st.error("שגיאה: כניסה חייבת להיות לפני יציאה")
+                            st.error("שגיאה: כניסה אחרי יציאה")
                         else:
-                            # מחיקת השורה הספציפית והוספת החדשה
-                            df_clean = df.drop(original_index)
-                            
-                            # בדיקת חפיפה (מתעלמים מהשורה שאנחנו עורכים כרגע כי מחקנו אותה זמנית מ-df_clean)
-                            if check_overlap(df_clean, sel_date, new_in, new_out):
-                                st.error("שגיאה: העדכון יוצר חפיפה עם רשומה אחרת")
+                            df_temp = df.drop(original_index)
+                            if check_overlap(df_temp, sel_date, new_in, new_out):
+                                st.error("שגיאה: העדכון יוצר חפיפה")
                             else:
                                 upd_row = pd.DataFrame([{
                                     "date": sel_date,
@@ -390,10 +403,10 @@ with tab_manage:
                                     "end_time": str(new_out),
                                     "notes": new_n
                                 }])
-                                new_df = pd.concat([df_clean, upd_row], ignore_index=True)
+                                new_df = pd.concat([df_temp, upd_row], ignore_index=True)
                                 update_google_sheet(new_df)
                 
-                with col_del:
-                    if st.button("מחק רשומה 🗑️", key="btn_delete", type="secondary", use_container_width=True):
-                        df_clean = df.drop(original_index)
-                        update_google_sheet(df_clean)
+                with col_btn_delete:
+                    # שינוי: במקום צ'ק בוקס, קריאה לדיאלוג
+                    if st.button("🗑️ מחק רשומה", type="secondary", use_container_width=True):
+                        delete_confirmation_dialog(original_index, sel_date, str(curr_row['start_time']), str(curr_row['end_time']))
