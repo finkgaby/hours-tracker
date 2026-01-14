@@ -263,37 +263,62 @@ with tab_manage:
                              key="manage_date_selector")
         
         d_sub = df[df['date'] == s_date].copy().reset_index()
+        
         def fmt(idx):
             r = d_sub.iloc[idx]
-            return f"{r['type']} | {str(r['start_time'])[:5]}" if r['type']=='עבודה' else r['type']
+            if r['type'] == 'עבודה':
+                try:
+                    t_val = str(r['start_time'])
+                    clean_time = datetime.strptime(t_val, "%H:%M:%S").strftime("%H:%M")
+                    return f"עבודה | {clean_time}"
+                except:
+                    return f"עבודה | {str(r['start_time'])[:5].rstrip(':')}"
+            return r['type']
         
         s_idx = st.selectbox("בחר רשומה", d_sub.index, format_func=fmt, key="manage_record_selector")
         curr_row = d_sub.iloc[s_idx]
         
         st.markdown("#### ✏️ עדכון פרטים")
-        new_type = st.radio("סוג מעודכן", ["עבודה", "חופשה", "מחלה", "שבתון"], 
-                           index=["עבודה", "חופשה", "מחלה", "שבתון"].index(curr_row['type']), 
-                           horizontal=True, key="manage_type_radio")
+        
+        types_options = ["עבודה", "חופשה", "מחלה", "שבתון"]
+        try:
+            current_idx = types_options.index(curr_row['type'])
+        except:
+            current_idx = 0
+
+        new_type = st.radio("סוג מעודכן", types_options, 
+                           index=current_idx, 
+                           horizontal=True, 
+                           key=f"manage_type_radio_{s_date}_{s_idx}")
         
         col1, col2 = st.columns(2)
         if new_type == "עבודה":
-            def to_t_obj(val):
-                try: return datetime.strptime(str(val), "%H:%M:%S").time()
-                except: return time(8,0)
-            # הוספת keys ייחודיים כאן פותרת את השגיאה
-            new_start = col1.time_input("כניסה", value=to_t_obj(curr_row['start_time']), key="manage_start_input")
-            new_end = col2.time_input("יציאה", value=to_t_obj(curr_row['end_time']), key="manage_end_input")
+            def to_t_obj(val, default_time):
+                try:
+                    # המרה לאובייקט זמן לצורך בדיקה
+                    t = datetime.strptime(str(val), "%H:%M:%S").time()
+                    # אם השעה היא חצות בדיוק (או קרובה מאוד), נניח שזה דיווח ריק ונשים ברירת מחדל
+                    if t.hour == 0 and t.minute == 0:
+                        return default_time
+                    return t
+                except:
+                    # במקרה של שגיאה בהמרה או ערך לא תקין
+                    return default_time
+            
+            # הצגת שעוני הזמן עם ברירות המחדל שביקשת
+            new_start = col1.time_input("כניסה", value=to_t_obj(curr_row['start_time'], time(6,30)), key=f"m_start_{s_date}_{s_idx}")
+            new_end = col2.time_input("יציאה", value=to_t_obj(curr_row['end_time'], time(15,30)), key=f"m_end_{s_date}_{s_idx}")
             st_val, en_val = str(new_start), str(new_end)
         else:
             st_val, en_val = "00:00:00", "00:00:00"
             
-        new_notes = st.text_input("הערות", value=str(curr_row['notes']) if pd.notna(curr_row['notes']) else "", key="manage_notes_input")
+        new_notes = st.text_input("הערות", value=str(curr_row['notes']) if pd.notna(curr_row['notes']) else "", key=f"m_notes_{s_date}_{s_idx}")
         
         c_upd, c_del = st.columns(2)
-        if c_upd.button("💾 שמור שינויים", use_container_width=True, type="primary", key="manage_update_btn"):
+        if c_upd.button("💾 שמור שינויים", use_container_width=True, type="primary", key=f"m_upd_btn_{s_date}_{s_idx}"):
             df.loc[curr_row['index'], ['type', 'start_time', 'end_time', 'notes']] = [new_type, st_val, en_val, new_notes]
             update_google_sheet(df)
             st.success("עודכן בהצלחה!")
 
-        if c_del.button("🗑️ מחק רשומה", use_container_width=True, key="manage_delete_btn"):
+        if c_del.button("🗑️ מחק רשומה", use_container_width=True, key=f"m_del_btn_{s_date}_{s_idx}"):
             update_google_sheet(df.drop(curr_row['index']))
