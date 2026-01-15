@@ -121,7 +121,8 @@ def render_metrics_and_nav(suffix):
                 e_t = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
                 hrs = (e_t - s_t).total_seconds() / 3600
                 ev_color = "#28a745" if (hrs >= get_target_hours(dt_obj)) else "#dc3545"
-                ev_title = format_time_display(row['start_time'])
+                # שינוי כאן: הצגת סך השעות במקום שעת כניסה
+                ev_title = f"{int(hrs)}:{int((hrs%1)*60):02d}"
             elif row_t == 'שבתון':
                 hrs, ev_color, ev_title = 0.0, "#6f42c1", "שבתון"
                 if dt_obj.year == year and dt_obj.month == month: m_target -= get_target_hours(dt_obj)
