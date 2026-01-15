@@ -35,6 +35,15 @@ st.markdown("""
         padding: 12px; border-radius: 12px; text-align: center; color: white; font-weight: bold; direction: rtl; margin-bottom: 10px;
     }
     th, td { text-align: right !important; padding: 8px !important; border-bottom: 1px solid #f0f2f6 !important; }
+    
+    /* עיצוב לפרטי אירוע נבחר */
+    .selected-date-info {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        border-right: 5px solid #ff7675;
+        margin-top: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,14 +79,12 @@ def format_time_display(val):
     except: return "00:00"
 
 def float_to_time_str(hf):
-    """ תיקון מיקום סימן המינוס כך שיופיע בצד שמאל של המספר """
     is_neg = hf < 0
     hf = abs(hf)
     h, m = int(hf), int(round((hf - int(hf)) * 60))
     if m == 60: h += 1; m = 0
     sign = "-" if is_neg else "+"
     if h == 0 and m == 0: sign = ""
-    # החזרת מחרוזת בפורמט LTR כדי שהמינוס יהיה משמאל
     return f"{sign}{h}:{m:02d}"
 
 def get_target_hours(dt):
@@ -86,7 +93,6 @@ def get_target_hours(dt):
 
 def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
-    # עיטוף הטקסט ב-div עם direction: ltr כדי לסדר את המינוס
     return f"""
     <div class="status-card" style="background-color: {color};">
         <div style="font-size:0.85rem;">{label}</div>
@@ -94,7 +100,6 @@ def get_status_card(label, diff_val):
     </div>"""
 
 def update_google_sheet(new_df, rerun=True):
-    """ עדכון גיליון וניקוי מטמון """
     conn.update(worksheet="Sheet1", data=new_df)
     st.cache_data.clear()
     if rerun:
@@ -121,7 +126,6 @@ def render_metrics_and_nav(suffix):
                 e_t = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
                 hrs = (e_t - s_t).total_seconds() / 3600
                 ev_color = "#28a745" if (hrs >= get_target_hours(dt_obj)) else "#dc3545"
-                # שינוי כאן: הצגת סך השעות במקום שעת כניסה
                 ev_title = f"{int(hrs)}:{int((hrs%1)*60):02d}"
             elif row_t == 'שבתון':
                 hrs, ev_color, ev_title = 0.0, "#6f42c1", "שבתון"
@@ -132,7 +136,8 @@ def render_metrics_and_nav(suffix):
 
             if dt_obj.year == year and dt_obj.month == month: done_m += hrs
             if str(sun_curr) <= row['date'] <= str(sat_curr): done_w += hrs
-            events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color})
+            # הוספת זיהוי תאריך לאירוע לצורך זיהוי בלחיצה
+            events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color, "id": row['date']})
         except: continue
 
     st.markdown(f"### 🗓️ סיכום עבור {month}/{year}")
@@ -171,7 +176,22 @@ tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים",
 
 with tab_stats:
     evs = render_metrics_and_nav("stats")
-    calendar(events=evs, options={"initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01", "headerToolbar": {"left": "", "center": "title", "right": ""}}, key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}")
+    # לכידת לחיצה על אירוע בלוח השנה
+    cal_res = calendar(events=evs, options={"initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01", "headerToolbar": {"left": "", "center": "title", "right": ""}}, key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}")
+    
+    # הצגת פרטים בלחיצה
+    if "eventClick" in cal_res:
+        clicked_date = cal_res["eventClick"]["event"]["start"]
+        row_data = df[df['date'] == clicked_date]
+        if not row_data.empty:
+            r = row_data.iloc[0]
+            st.markdown(f"""
+            <div class="selected-date-info">
+                <strong>📅 תאריך: {datetime.strptime(clicked_date, '%Y-%m-%d').strftime('%d/%m/%Y')}</strong><br>
+                🕒 כניסה: {format_time_display(r['start_time'])} | 🕒 יציאה: {format_time_display(r['end_time'])}<br>
+                💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}
+            </div>
+            """, unsafe_allow_html=True)
 
 with tab_details:
     render_metrics_and_nav("details")
