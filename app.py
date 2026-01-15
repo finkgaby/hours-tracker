@@ -9,12 +9,13 @@ import time as time_lib
 # --- הגדרות עמוד ---
 st.set_page_config(page_title="מערכת דיווח שעות", page_icon="⏱️", layout="centered")
 
+# ניהול זיכרון לצפייה בחודשים
 if 'view_month' not in st.session_state:
     st.session_state.view_month = datetime.now().month
 if 'view_year' not in st.session_state:
     st.session_state.view_year = datetime.now().year
 
-# --- CSS מותאם ליישור לימין, עיצוב כללי וניקיון טבלה ---
+# --- CSS מותאם ליישור לימין ועיצוב כללי ---
 st.markdown("""
 <style>
     .stApp { text-align: right; }
@@ -50,8 +51,7 @@ st.markdown("""
     }
     .status-label { font-size: 0.85rem; margin-bottom: 4px; opacity: 0.95; }
     .status-value { font-size: 1.4rem; direction: ltr; letter-spacing: 1px; }
-
-    /* עיצוב הטבלה ללא עמודת אינדקס */
+    
     th, td { text-align: right !important; padding: 8px !important; border-bottom: 1px solid #f0f2f6 !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -80,8 +80,8 @@ df = load_data()
 # --- פונקציות עזר ---
 def format_time_display(val):
     try:
-        t_str = str(val).split(':')
-        return f"{int(t_str[0]):02d}:{int(t_str[1]):02d}"
+        t_parts = str(val).split(':')
+        return f"{int(t_parts[0]):02d}:{int(t_parts[1]):02d}"
     except: return "00:00"
 
 def float_to_time_str(hf):
@@ -96,7 +96,6 @@ def get_target_hours(dt):
     wd = dt.weekday()
     return 8.5 if wd == 3 else (0.0 if wd in [4, 5] else 9.0)
 
-# פונקציית העיצוב שהייתה חסרה
 def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
     return f"""<div class="status-card" style="background-color: {color};"><div class="status-label">{label}</div><div class="status-value">{float_to_time_str(diff_val)}</div></div>"""
@@ -104,8 +103,7 @@ def get_status_card(label, diff_val):
 def update_google_sheet(new_df, rerun=True):
     conn.update(worksheet="Sheet1", data=new_df)
     st.cache_data.clear()
-    if rerun:
-        st.rerun()
+    if rerun: st.rerun()
 
 def render_metrics_and_nav(suffix):
     year, month = st.session_state.view_year, st.session_state.view_month
@@ -176,15 +174,7 @@ tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים �
 
 with tab_stats:
     events = render_metrics_and_nav("stats")
-    calendar(
-        events=events, 
-        options={
-            "initialView": "dayGridMonth", "locale": "he", "direction": "rtl", 
-            "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01",
-            "headerToolbar": {"left": "", "center": "title", "right": ""}
-        }, 
-        key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}"
-    )
+    calendar(events=events, options={"initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01", "headerToolbar": {"left": "", "center": "title", "right": ""}}, key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}")
 
 with tab_details:
     render_metrics_and_nav("details")
@@ -194,6 +184,7 @@ with tab_details:
         m_data['תאריך'] = pd.to_datetime(m_data['date']).dt.strftime('%d/%m/%Y')
         m_data['כניסה'] = m_data['start_time'].apply(format_time_display)
         m_data['יציאה'] = m_data['end_time'].apply(format_time_display)
+        # הצגת טבלה ללא עמודת מספור
         st.markdown(m_data[['תאריך', 'type', 'כניסה', 'יציאה', 'notes']].rename(columns={'type': 'סוג', 'notes': 'הערה'}).to_html(index=False), unsafe_allow_html=True)
     else: st.info("אין נתונים לחודש זה")
 
@@ -218,40 +209,21 @@ with tab_report:
         try:
             excel_df = pd.read_excel(excel_file)
             if st.button("🚀 טען ודרוס נתונים", use_container_width=True):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                new_entries = []
-                total_rows = len(excel_df)
-                
+                pb = st.progress(0); st_txt = st.empty()
+                new_entries = []; total_rows = len(excel_df)
                 for i, row in excel_df.iterrows():
-                    progress = (i + 1) / total_rows
-                    progress_bar.progress(progress)
-                    status_text.text(f"מעבד שורה {i+1} מתוך {total_rows}...")
-                    
+                    pb.progress((i+1)/total_rows); st_txt.text(f"מעבד שורה {i+1}...")
                     curr_d = pd.to_datetime(row['תאריך']).strftime('%Y-%m-%d')
-                    def to_t_str(v):
+                    def t_to_s(v):
                         if pd.isna(v): return "00:00:00"
                         if isinstance(v, time): return v.strftime('%H:%M:00')
                         return pd.to_datetime(v).strftime('%H:%M:00')
-                    
-                    new_entries.append({
-                        "date": curr_d, "start_time": to_t_str(row['משעה']), 
-                        "end_time": to_t_str(row.get('עד שעה', '00:00:00')), 
-                        "notes": str(row.get('תיאור', '')), "type": "עבודה"
-                    })
-                
-                status_text.text("שומר נתונים בגיליון... אנא המתן")
+                    new_entries.append({"date": curr_d, "start_time": t_to_s(row['משעה']), "end_time": t_to_s(row.get('עד שעה', '00:00:00')), "notes": str(row.get('תיאור', '')), "type": "עבודה"})
                 dates = [e['date'] for e in new_entries]
                 update_google_sheet(pd.concat([df[~df['date'].isin(dates)], pd.DataFrame(new_entries)], ignore_index=True), rerun=False)
-                
-                status_text.empty()
-                progress_bar.empty()
-                st.balloons()
-                st.success(f"🎊 איזה יופי! טעינת הקובץ ועדכון {total_rows} רשומות הסתיימו בהצלחה!")
-                time_lib.sleep(4) 
-                st.rerun()
-                
-        except Exception as e: st.error(f"שגיאה: וודא שביצעת 'python -m pip install openpyxl'. {e}")
+                st_txt.empty(); pb.empty(); st.balloons()
+                st.success("✅ עדכון הסתיים!"); time_lib.sleep(3); st.rerun()
+        except Exception as e: st.error(f"שגיאה: {e}")
 
 with tab_manage:
     if not df.empty:
