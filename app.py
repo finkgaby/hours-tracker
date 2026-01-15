@@ -70,11 +70,14 @@ def format_time_display(val):
     except: return "00:00"
 
 def float_to_time_str(hf):
+    """ תיקון מיקום סימן המינוס כך שיופיע בצד שמאל של המספר """
     is_neg = hf < 0
     hf = abs(hf)
     h, m = int(hf), int(round((hf - int(hf)) * 60))
     if m == 60: h += 1; m = 0
-    sign = "+" if not is_neg and hf > 0 else ("-" if is_neg else "")
+    sign = "-" if is_neg else "+"
+    if h == 0 and m == 0: sign = ""
+    # החזרת מחרוזת בפורמט LTR כדי שהמינוס יהיה משמאל
     return f"{sign}{h}:{m:02d}"
 
 def get_target_hours(dt):
@@ -83,10 +86,15 @@ def get_target_hours(dt):
 
 def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
-    return f"""<div class="status-card" style="background-color: {color};"><div style="font-size:0.85rem;">{label}</div><div>{float_to_time_str(diff_val)}</div></div>"""
+    # עיטוף הטקסט ב-div עם direction: ltr כדי לסדר את המינוס
+    return f"""
+    <div class="status-card" style="background-color: {color};">
+        <div style="font-size:0.85rem;">{label}</div>
+        <div style="direction: ltr; unicode-bidi: bidi-override;">{float_to_time_str(diff_val)}</div>
+    </div>"""
 
-# תיקון פונקציית העדכון - הוספת פרמטר rerun
 def update_google_sheet(new_df, rerun=True):
+    """ עדכון גיליון וניקוי מטמון """
     conn.update(worksheet="Sheet1", data=new_df)
     st.cache_data.clear()
     if rerun:
@@ -178,13 +186,13 @@ with tab_report:
     st.subheader("📝 דיווח ידני")
     d_in = st.date_input("תאריך", date.today(), format="DD/MM/YYYY")
     r_t = st.radio("סוג", ["עבודה", "חופשה", "מחלה", "שבתון"], horizontal=True)
-    s_t, en_t = time(6,30), time(15,30)
+    st_t, en_t = time(6,30), time(15,30)
     if r_t == "עבודה":
         c1, c2 = st.columns(2)
-        s_t, en_t = c1.time_input("כניסה", s_t), c2.time_input("יציאה", en_t)
+        st_t, en_t = c1.time_input("כניסה", st_t), c2.time_input("יציאה", en_t)
     n_in = st.text_input("הערה", key="new_note")
     if st.button("שמור דיווח", type="primary", use_container_width=True):
-        new_row = pd.DataFrame([{"date": str(d_in), "start_time": f"{s_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
+        new_row = pd.DataFrame([{"date": str(d_in), "start_time": f"{st_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
         update_google_sheet(pd.concat([df[df['date'] != str(d_in)], new_row], ignore_index=True))
 
     st.divider()
