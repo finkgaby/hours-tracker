@@ -36,7 +36,6 @@ st.markdown("""
         font-weight: bold !important;
         height: 34px !important;
         min-width: 67px !important;
-        font-size: 16px !important;
     }
 
     .status-card {
@@ -130,12 +129,12 @@ def render_metrics_and_nav(suffix):
             elif row_t == 'שבתון':
                 hrs, ev_color, ev_title = 0.0, "#6f42c1", "שבתון"
                 if dt_obj.year == year and dt_obj.month == month: m_target -= get_target_hours(dt_obj)
-                if sun_curr <= dt_obj.date() <= sat_curr: w_target -= get_target_hours(dt_obj)
+                if str(sun_curr) <= row['date'] <= str(sat_curr): w_target -= get_target_hours(dt_obj)
             else:
                 hrs, ev_color, ev_title = get_target_hours(dt_obj), ("#007bff" if row_t == 'חופשה' else "#fd7e14"), row_t
 
             if dt_obj.year == year and dt_obj.month == month: done_m += hrs
-            if sun_curr <= dt_obj.date() <= sat_curr: done_w += hrs
+            if str(sun_curr) <= row['date'] <= str(sat_curr): done_w += hrs
             events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color})
         except: continue
 
@@ -184,7 +183,6 @@ with tab_details:
         m_data['תאריך'] = pd.to_datetime(m_data['date']).dt.strftime('%d/%m/%Y')
         m_data['כניסה'] = m_data['start_time'].apply(format_time_display)
         m_data['יציאה'] = m_data['end_time'].apply(format_time_display)
-        # הצגת טבלה ללא עמודת מספור
         st.markdown(m_data[['תאריך', 'type', 'כניסה', 'יציאה', 'notes']].rename(columns={'type': 'סוג', 'notes': 'הערה'}).to_html(index=False), unsafe_allow_html=True)
     else: st.info("אין נתונים לחודש זה")
 
@@ -197,7 +195,7 @@ with tab_report:
         c1, c2 = st.columns(2)
         st_t = c1.time_input("כניסה", time(6,30))
         en_t = c2.time_input("יציאה", time(15,30))
-    n_in = st.text_input("הערה", key="new_rep_note")
+    n_in = st.text_input("הערות", key="new_rep_note")
     if st.button("שמור דיווח", type="primary", use_container_width=True):
         new = pd.DataFrame([{"date": str(d_in), "start_time": f"{st_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
         update_google_sheet(pd.concat([df[df['date'] != str(d_in)], new], ignore_index=True))
@@ -219,8 +217,7 @@ with tab_report:
                         if isinstance(v, time): return v.strftime('%H:%M:00')
                         return pd.to_datetime(v).strftime('%H:%M:00')
                     new_entries.append({"date": curr_d, "start_time": t_to_s(row['משעה']), "end_time": t_to_s(row.get('עד שעה', '00:00:00')), "notes": str(row.get('תיאור', '')), "type": "עבודה"})
-                dates = [e['date'] for e in new_entries]
-                update_google_sheet(pd.concat([df[~df['date'].isin(dates)], pd.DataFrame(new_entries)], ignore_index=True), rerun=False)
+                update_google_sheet(pd.concat([df[~df['date'].isin([e['date'] for e in new_entries])], pd.DataFrame(new_entries)], ignore_index=True), rerun=False)
                 st_txt.empty(); pb.empty(); st.balloons()
                 st.success("✅ עדכון הסתיים!"); time_lib.sleep(3); st.rerun()
         except Exception as e: st.error(f"שגיאה: {e}")
@@ -235,10 +232,7 @@ with tab_manage:
         s_date = st.selectbox("בחר תאריך", d_list, index=current_idx, format_func=lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y'))
         st.session_state.last_manage_date = s_date
         d_sub = df[df['date'] == s_date].copy().reset_index()
-        def fmt(idx):
-            r = d_sub.iloc[idx]
-            return f"{r['type']} | {format_time_display(r['start_time'])}" if r['type'] == 'עבודה' else r['type']
-        s_idx = st.selectbox("בחר רשומה", d_sub.index, format_func=fmt)
+        s_idx = st.selectbox("בחר רשומה", d_sub.index, format_func=lambda i: f"{d_sub.iloc[i]['type']} | {format_time_display(d_sub.iloc[i]['start_time'])}")
         curr = d_sub.iloc[s_idx]
         st.markdown("#### ✏️ עדכון")
         types = ["עבודה", "חופשה", "מחלה", "שבתון"]
@@ -246,9 +240,8 @@ with tab_manage:
         st_v, en_v = curr['start_time'], curr['end_time']
         if new_t == "עבודה":
             c1, c2 = st.columns(2)
-            def t_obj(v): return datetime.strptime(str(v)[:8], "%H:%M:%S").time()
-            st_v = c1.time_input("כניסה", value=t_obj(curr['start_time']), key=f"sin_{s_date}_{s_idx}")
-            en_v = c2.time_input("יציאה", value=t_obj(curr['end_time']), key=f"eout_{s_date}_{s_idx}")
+            st_v = c1.time_input("כניסה", value=datetime.strptime(str(curr['start_time'])[:8], "%H:%M:%S").time(), key=f"sin_{s_date}_{s_idx}")
+            en_v = c2.time_input("יציאה", value=datetime.strptime(str(curr['end_time'])[:8], "%H:%M:%S").time(), key=f"eout_{s_date}_{s_idx}")
         new_n = st.text_input("הערה", value=curr['notes'], key=f"nedit_{s_date}_{s_idx}")
         if st.button("💾 שמור שינויים", type="primary", use_container_width=True, key=f"bsave_{s_date}_{s_idx}"):
             df.loc[curr['index'], ['type', 'start_time', 'end_time', 'notes']] = [new_t, str(st_v), str(en_v), new_n]
