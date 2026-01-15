@@ -41,6 +41,20 @@ st.markdown("""
         justify-content: center !important;
         font-size: 16px !important;
     }
+
+    /* עיצוב כרטיסי המאזן הצבעוניים */
+    .status-card {
+        padding: 12px;
+        border-radius: 12px;
+        text-align: center;
+        color: white;
+        font-weight: bold;
+        direction: rtl;
+        margin-bottom: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .status-label { font-size: 0.85rem; margin-bottom: 4px; opacity: 0.95; }
+    .status-value { font-size: 1.4rem; direction: ltr; letter-spacing: 1px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,7 +84,9 @@ def float_to_time_str(hf):
     hf = abs(hf)
     h, m = int(hf), int(round((hf - int(hf)) * 60))
     if m == 60: h += 1; m = 0
-    return f"{'-' if is_neg else ''}{h}:{m:02d}"
+    # הצגת סימן ברור: פלוס לחריגה, מינוס לחוסר
+    sign = "+" if not is_neg and hf > 0 else ("-" if is_neg else "")
+    return f"{sign}{h}:{m:02d}"
 
 def get_target_hours(dt):
     wd = dt.weekday()
@@ -102,6 +118,19 @@ def update_google_sheet(new_df):
     st.cache_data.clear()
     st.rerun()
 
+def get_status_card(label, diff_val):
+    # לוגיקת צבעים למאזן שעות:
+    if diff_val > 0: color = "#f39c12" # כתום (חריגה/שעות נוספות)
+    elif diff_val < 0: color = "#ff4b4b" # אדום (חוסר שעות)
+    else: color = "#28a745" # ירוק (עמידה מדויקת ביעד)
+    
+    return f"""
+    <div class="status-card" style="background-color: {color};">
+        <div class="status-label">{label}</div>
+        <div class="status-value">{float_to_time_str(diff_val)}</div>
+    </div>
+    """
+
 # --- הגדרת הטאבים ---
 tab_stats, tab_report, tab_manage = st.tabs(["📊 סיכומים ולוח שנה", "📝 דיווח חדש", "🛠️ ניהול ועריכה"])
 
@@ -120,12 +149,18 @@ with tab_stats:
         try:
             dt_obj = datetime.strptime(row['date'], '%Y-%m-%d')
             row_t = row.get('type', 'עבודה')
+            
+            def simple_time_str(hf):
+                h, m = int(hf), int(round((hf - int(hf)) * 60))
+                if m == 60: h += 1; m = 0
+                return f"{h}:{m:02d}"
+
             if row_t == 'עבודה':
                 s = datetime.strptime(f"{row['date']} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
                 e = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
                 hrs = (e - s).total_seconds() / 3600
                 ev_color = "#28a745" if (hrs - get_target_hours(dt_obj)) >= 0 else "#dc3545"
-                ev_title = float_to_time_str(hrs)
+                ev_title = simple_time_str(hrs)
             elif row_t == 'שבתון':
                 hrs, ev_color, ev_title = 0.0, "#6f42c1", "שבתון"
             else:
@@ -140,16 +175,20 @@ with tab_stats:
 
     st.markdown("#### 📈 מדדי חודש")
     c1, c2, c3 = st.columns(3)
-    c1.metric("📋 תקן חודשי", f"{m_target} ש'")
-    c2.metric("✅ בוצע בחודש", float_to_time_str(done_m))
-    c3.metric("⏳ נותר לחודש", float_to_time_str(max(0, m_target - done_m)))
+    c1.metric("📋 תקן חודשי", f"{int(m_target)}:{int((m_target%1)*60):02d} ש'")
+    c2.metric("✅ בוצע בחודש", f"{int(done_m)}:{int((done_m%1)*60):02d}")
+    with c3:
+        # כותרת מעודכנת שמתאימה לפלוס/מינוס
+        st.markdown(get_status_card("⚖️ מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
     
     st.divider()
     st.markdown("#### 📅 מדדי שבוע נוכחי")
     w1, w2, w3 = st.columns(3)
-    w1.metric("📊 תקן שבועי", f"{w_target} ש'")
-    w2.metric("⏱️ בוצע השבוע", float_to_time_str(done_w))
-    w3.metric("🎯 נותר לשבוע", float_to_time_str(max(0, w_target - done_w)))
+    w1.metric("📊 תקן שבועי", f"{int(w_target)}:{int((w_target%1)*60):02d} ש'")
+    w2.metric("⏱️ בוצע השבוע", f"{int(done_w)}:{int((done_w%1)*60):02d}")
+    with w3:
+        # כותרת מעודכנת שמתאימה לפלוס/מינוס
+        st.markdown(get_status_card("⚖️ מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
 
     st.divider()
     col_nav, _ = st.columns([0.4, 0.6])
@@ -180,6 +219,8 @@ with tab_stats:
         key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}"
     )
 
+# --- הטאבים האחרים נשארים ללא שינוי ---
+# ... (דיווח וניהול) ...
 with tab_report:
     st.subheader("📝 דיווח ידני")
     d_in = st.date_input("תאריך", date.today(), format="DD/MM/YYYY", key="rep_d")
@@ -295,17 +336,13 @@ with tab_manage:
         if new_type == "עבודה":
             def to_t_obj(val, default_time):
                 try:
-                    # המרה לאובייקט זמן לצורך בדיקה
                     t = datetime.strptime(str(val), "%H:%M:%S").time()
-                    # אם השעה היא חצות בדיוק (או קרובה מאוד), נניח שזה דיווח ריק ונשים ברירת מחדל
                     if t.hour == 0 and t.minute == 0:
                         return default_time
                     return t
                 except:
-                    # במקרה של שגיאה בהמרה או ערך לא תקין
                     return default_time
             
-            # הצגת שעוני הזמן עם ברירות המחדל שביקשת
             new_start = col1.time_input("כניסה", value=to_t_obj(curr_row['start_time'], time(6,30)), key=f"m_start_{s_date}_{s_idx}")
             new_end = col2.time_input("יציאה", value=to_t_obj(curr_row['end_time'], time(15,30)), key=f"m_end_{s_date}_{s_idx}")
             st_val, en_val = str(new_start), str(new_end)
