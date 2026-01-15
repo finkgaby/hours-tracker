@@ -9,13 +9,13 @@ import time as time_lib
 # --- הגדרות עמוד ---
 st.set_page_config(page_title="מערכת דיווח שעות", page_icon="⏱️", layout="centered")
 
-# אתחול Session State לניהול תאריכים
+# ניהול Session State לניהול תאריכים
 if 'view_month' not in st.session_state:
     st.session_state.view_month = datetime.now().month
 if 'view_year' not in st.session_state:
     st.session_state.view_year = datetime.now().year
 
-# --- CSS מותאם ליישור לימין ועיצוב כללי ---
+# --- CSS מותאם ---
 st.markdown("""
 <style>
     .stApp { text-align: right; }
@@ -27,39 +27,27 @@ st.markdown("""
     div[data-testid="stMetricValue"] { text-align: right !important; direction: ltr; width: 100%; }
     .stTabs [data-baseweb="tab-list"] { flex-direction: row-reverse; justify-content: flex-end; }
     .fc-toolbar-title { font-family: sans-serif; text-align: center; }
-
     .stButton > button {
-        background-color: #ff7675 !important;
-        color: white !important;
-        border: 1px solid #ff7675 !important;
-        border-radius: 4px !important;
-        height: 34px !important;
-        font-weight: bold !important;
+        background-color: #ff7675 !important; color: white !important; border: 1px solid #ff7675 !important;
+        border-radius: 4px !important; font-weight: bold !important; height: 34px !important;
     }
-
     .status-card {
-        padding: 12px;
-        border-radius: 12px;
-        text-align: center;
-        color: white;
-        font-weight: bold;
-        direction: rtl;
-        margin-bottom: 10px;
+        padding: 12px; border-radius: 12px; text-align: center; color: white; font-weight: bold; direction: rtl; margin-bottom: 10px;
     }
-    
     th, td { text-align: right !important; padding: 8px !important; border-bottom: 1px solid #f0f2f6 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("⏱️ מערכת דיווח שעות")
 
-# --- טעינת נתונים (ללא Cache בעייתי בענן) ---
+# --- חיבור וטעינת נתונים (Cache להפסקת הריענון האינסופי) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# טעינה עם Cache כדי למנוע חריגת Quota
 def load_data():
     try:
-        # טעינה ישירה עם ttl=0 למניעת לולאות ונתונים ישנים
-        existing_data = conn.read(worksheet="Sheet1", ttl=0)
+        # ttl=600 שומר את הנתונים ל-10 דקות ומונע פניות מיותרות לגוגל
+        existing_data = conn.read(worksheet="Sheet1", ttl=600)
         df = pd.DataFrame(existing_data)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
@@ -69,7 +57,10 @@ def load_data():
             df['notes'] = df.get('notes', '').fillna('')
         return df
     except Exception as e:
-        st.error(f"שגיאה בטעינת הנתונים: {e}")
+        if "429" in str(e):
+            st.error("⚠️ חריגה ממכסת הבקשות לגוגל. המתן 2-3 דקות והנתונים יחזרו.")
+        else:
+            st.error(f"שגיאה בטעינת הנתונים: {e}")
         return pd.DataFrame(columns=["date", "start_time", "end_time", "notes", "type"])
 
 df = load_data()
@@ -77,8 +68,8 @@ df = load_data()
 # --- פונקציות עזר ---
 def format_time_display(val):
     try:
-        t_parts = str(val).split(':')
-        return f"{int(t_parts[0]):02d}:{int(t_parts[1]):02d}"
+        parts = str(val).split(':')
+        return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
     except: return "00:00"
 
 def float_to_time_str(hf):
@@ -97,18 +88,15 @@ def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
     return f"""<div class="status-card" style="background-color: {color};"><div style="font-size:0.85rem;">{label}</div><div>{float_to_time_str(diff_val)}</div></div>"""
 
-def update_google_sheet(new_df, rerun=True):
+def update_google_sheet(new_df, needs_rerun=True):
     conn.update(worksheet="Sheet1", data=new_df)
-    if rerun: st.rerun()
+    st.cache_data.clear() # ניקוי המטמון רק לאחר עדכון
+    if needs_rerun: st.rerun()
 
 def render_metrics_and_nav(suffix):
-    # שימוש בערכים מה-Session State לצורך החישובים
     year, month = st.session_state.view_year, st.session_state.view_month
-    
-    # חישוב יעד חודשי
     m_target = sum(get_target_hours(date(year, month, d)) for d in range(1, cal_lib.monthrange(year, month)[1] + 1))
     
-    # חישוב יעד שבועי
     today_dt = date.today()
     sun_curr = today_dt - timedelta(days=(today_dt.weekday() + 1) % 7)
     sat_curr = sun_curr + timedelta(days=6)
@@ -121,9 +109,7 @@ def render_metrics_and_nav(suffix):
             dt_obj = datetime.strptime(row['date'], '%Y-%m-%d')
             row_t = row.get('type', 'עבודה')
             hrs = 0.0
-            
             if row_t == 'עבודה':
-                # טיפול בפורמט הזמן בעת החישוב
                 s_t = datetime.strptime(f"{row['date']} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
                 e_t = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
                 hrs = (e_t - s_t).total_seconds() / 3600
@@ -142,58 +128,44 @@ def render_metrics_and_nav(suffix):
         except: continue
 
     st.markdown(f"### 🗓️ סיכום עבור {month}/{year}")
-    
-    # הצגת המדדים
-    st.markdown("#### 📈 מדדי חודש")
     c1, c2, c3 = st.columns(3)
-    c1.metric("📋 תקן חודשי", f"{int(m_target)}:{int((m_target%1)*60):02d} ש'")
-    c2.metric("✅ בוצע בחודש", f"{int(done_m)}:{int((done_m%1)*60):02d}")
+    c1.metric("📋 תקן חודשי", f"{int(m_target)}:{int((m_target%1)*60):02d}")
+    c2.metric("✅ בוצע חודש", f"{int(done_m)}:{int((done_m%1)*60):02d}")
     with c3: st.markdown(get_status_card("⚖️ מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
     
     st.divider()
-    st.markdown("#### 📅 מדדי שבוע נוכחי")
     w1, w2, w3 = st.columns(3)
-    w1.metric("📊 תקן שבועי", f"{int(w_target)}:{int((w_target%1)*60):02d} ש'")
-    w2.metric("⏱️ בוצע השבוע", f"{int(done_w)}:{int((done_w%1)*60):02d}")
+    w1.metric("📊 תקן שבועי", f"{int(w_target)}:{int((w_target%1)*60):02d}")
+    w2.metric("⏱️ בוצע שבוע", f"{int(done_w)}:{int((done_w%1)*60):02d}")
     with w3: st.markdown(get_status_card("⚖️ מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
 
     st.divider()
-    # כפתורי ניווט
     col_nav, _ = st.columns([0.4, 0.6])
     with col_nav:
-        sub_c1, sub_c2, sub_c3 = st.columns(3)
-        if sub_c1.button("קודם", key=f"p_{suffix}"):
+        sub1, sub2, sub3 = st.columns(3)
+        if sub1.button("קודם", key=f"p_{suffix}"):
             if st.session_state.view_month == 1:
                 st.session_state.view_month = 12; st.session_state.view_year -= 1
             else: st.session_state.view_month -= 1
             st.rerun()
-        if sub_c2.button("היום", key=f"t_{suffix}"):
+        if sub2.button("היום", key=f"t_{suffix}"):
             st.session_state.view_month, st.session_state.view_year = datetime.now().month, datetime.now().year
             st.rerun()
-        if sub_c3.button("הבא", key=f"n_{suffix}"):
+        if sub3.button("הבא", key=f"n_{suffix}"):
             if st.session_state.view_month == 12:
                 st.session_state.view_month = 1; st.session_state.view_year += 1
             else: st.session_state.view_month += 1
             st.rerun()
     return events
 
-# --- הגדרת הטאבים ---
-tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים ולוח שנה", "📋 פירוט", "📝 דיווח חדש", "🛠️ ניהול ועריכה"])
+# --- טאבים ---
+tab1, tab2, tab3, tab4 = st.tabs(["📊 סיכומים", "📋 פירוט", "📝 דיווח", "🛠️ ניהול"])
 
-with tab_stats:
-    events = render_metrics_and_nav("stats")
-    # הלוח מתעדכן לפי ה-Session State
-    calendar(
-        events=events, 
-        options={
-            "initialView": "dayGridMonth", "locale": "he", "direction": "rtl", 
-            "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01",
-            "headerToolbar": {"left": "", "center": "title", "right": ""}
-        }, 
-        key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}"
-    )
+with tab1:
+    evs = render_metrics_and_nav("stats")
+    calendar(events=evs, options={"initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01", "headerToolbar": {"left": "", "center": "title", "right": ""}}, key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}")
 
-with tab_details:
+with tab2:
     render_metrics_and_nav("details")
     month_prefix = f"{st.session_state.view_year}-{st.session_state.view_month:02d}"
     m_data = df[df['date'].str.startswith(month_prefix)].copy().sort_values('date')
@@ -201,31 +173,27 @@ with tab_details:
         m_data['תאריך'] = pd.to_datetime(m_data['date']).dt.strftime('%d/%m/%Y')
         m_data['כניסה'] = m_data['start_time'].apply(format_time_display)
         m_data['יציאה'] = m_data['end_time'].apply(format_time_display)
-        # הצגת הטבלה ללא עמודת מספור
         st.markdown(m_data[['תאריך', 'type', 'כניסה', 'יציאה', 'notes']].rename(columns={'type': 'סוג', 'notes': 'הערה'}).to_html(index=False), unsafe_allow_html=True)
-    else: st.info("אין נתונים לחודש זה")
+    else: st.info("אין נתונים")
 
-with tab_report:
-    # --- דיווח ללא שינוי ---
-    st.subheader("📝 דיווח ידני")
-    d_in = st.date_input("תאריך", date.today(), format="DD/MM/YYYY")
+with tab3:
+    st.subheader("📝 דיווח")
+    d_i = st.date_input("תאריך", date.today(), format="DD/MM/YYYY")
     r_t = st.radio("סוג", ["עבודה", "חופשה", "מחלה", "שבתון"], horizontal=True)
-    st_t, en_t = time(0,0), time(0,0)
+    s_t, e_t = time(6,30), time(15,30)
     if r_t == "עבודה":
         c1, c2 = st.columns(2)
-        st_t = c1.time_input("כניסה", time(6,30))
-        en_t = c2.time_input("יציאה", time(15,30))
-    n_in = st.text_input("הערה", key="new_rep_note")
+        s_t, e_t = c1.time_input("כניסה", s_t), c2.time_input("יציאה", e_t)
+    n_i = st.text_input("הערות", key="new_note")
     if st.button("שמור דיווח", type="primary", use_container_width=True):
-        new = pd.DataFrame([{"date": str(d_in), "start_time": f"{st_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
-        update_google_sheet(pd.concat([df[df['date'] != str(d_in)], new], ignore_index=True))
+        new_row = pd.DataFrame([{"date": str(d_i), "start_time": f"{s_t}", "end_time": f"{e_t}", "notes": n_i, "type": r_t}])
+        update_google_sheet(pd.concat([df[df['date'] != str(d_i)], new_row], ignore_index=True))
 
     st.divider()
-    st.subheader("📂 טעינת קובץ אקסל")
-    f_up = st.file_uploader("בחר קובץ אקסל", type=["xlsx", "xls"])
-    if f_up:
+    f = st.file_uploader("טעינת אקסל", type=["xlsx", "xls"])
+    if f:
         try:
-            edf = pd.read_excel(f_up)
+            edf = pd.read_excel(f)
             if st.button("🚀 טען ודרוס נתונים", use_container_width=True):
                 pb = st.progress(0); stxt = st.empty(); entries = []; total = len(edf)
                 for i, row in edf.iterrows():
@@ -233,39 +201,35 @@ with tab_report:
                     curr_d = pd.to_datetime(row['תאריך']).strftime('%Y-%m-%d')
                     def t_to_s(v):
                         if pd.isna(v): return "00:00:00"
-                        if isinstance(v, time): return v.strftime('%H:%M:00')
-                        return pd.to_datetime(v).strftime('%H:%M:00')
+                        return v.strftime('%H:%M:00') if isinstance(v, time) else pd.to_datetime(v).strftime('%H:%M:00')
                     entries.append({"date": curr_d, "start_time": t_to_s(row['משעה']), "end_time": t_to_s(row.get('עד שעה', '00:00:00')), "notes": str(row.get('תיאור', '')), "type": "עבודה"})
                 update_google_sheet(pd.concat([df[~df['date'].isin([e['date'] for e in entries])], pd.DataFrame(entries)], ignore_index=True), rerun=False)
                 stxt.empty(); pb.empty(); st.balloons(); st.success("✅ עדכון הסתיים!"); time_lib.sleep(3); st.rerun()
-        except Exception as e: st.error(f"שגיאה בטעינת הקובץ: {e}")
+        except Exception as e: st.error(f"שגיאה: {e}")
 
-with tab_manage:
+with tab4:
     if not df.empty:
-        st.subheader("🛠️ ניהול ועריכה")
-        d_list = sorted(df['date'].unique())
-        if 'last_manage_date' not in st.session_state: st.session_state.last_manage_date = d_list[-1]
-        try: current_idx = d_list.index(st.session_state.last_manage_date)
-        except: current_idx = len(d_list)-1
-        s_date = st.selectbox("בחר תאריך", d_list, index=current_idx, format_func=lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y'))
-        st.session_state.last_manage_date = s_date
-        d_sub = df[df['date'] == s_date].copy().reset_index()
-        s_idx = st.selectbox("בחר רשומה", d_sub.index, format_func=lambda i: f"{d_sub.iloc[i]['type']} | {format_time_display(d_sub.iloc[i]['start_time'])}")
-        curr = d_sub.iloc[s_idx]
-        st.markdown("#### ✏️ עדכון")
+        st.subheader("🛠️ ניהול")
+        d_l = sorted(df['date'].unique())
+        if 'last_d' not in st.session_state: st.session_state.last_d = d_l[-1]
+        try: idx = d_l.index(st.session_state.last_d)
+        except: idx = len(d_l)-1
+        s_d = st.selectbox("תאריך", d_l, index=idx, format_func=lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y'))
+        st.session_state.last_d = s_d
+        sub = df[df['date'] == s_d].copy().reset_index()
+        s_i = st.selectbox("רשומה", sub.index, format_func=lambda i: f"{sub.iloc[i]['type']} | {format_time_display(sub.iloc[i]['start_time'])}")
+        curr_r = sub.iloc[s_i]
+        st.markdown("#### עדכון")
         types = ["עבודה", "חופשה", "מחלה", "שבתון"]
-        new_t = st.radio("סוג", types, index=types.index(curr['type']), horizontal=True, key=f"tr_{s_date}_{s_idx}")
-        st_v, en_v = curr['start_time'], curr['end_time']
-        if new_t == "עבודה":
+        nt = st.radio("סוג", types, index=types.index(curr_r['type']), horizontal=True, key=f"nt_{s_d}_{s_i}")
+        sv, ev = curr_r['start_time'], curr_r['end_time']
+        if nt == "עבודה":
             c1, c2 = st.columns(2)
-            # המרה בטוחה לפורמט זמן
-            curr_s = datetime.strptime(str(curr['start_time'])[:8], "%H:%M:%S").time()
-            curr_e = datetime.strptime(str(curr['end_time'])[:8], "%H:%M:%S").time()
-            st_v = c1.time_input("כניסה", value=curr_s, key=f"sin_{s_date}_{s_idx}")
-            en_v = c2.time_input("יציאה", value=curr_e, key=f"eout_{s_date}_{s_idx}")
-        new_n = st.text_input("הערה", value=curr['notes'], key=f"nedit_{s_date}_{s_idx}")
-        if st.button("💾 שמור שינויים", type="primary", use_container_width=True, key=f"bsave_{s_date}_{s_idx}"):
-            df.loc[curr['index'], ['type', 'start_time', 'end_time', 'notes']] = [new_t, str(st_v), str(en_v), new_n]
+            sv = c1.time_input("כניסה", value=datetime.strptime(str(curr_r['start_time'])[:8], "%H:%M:%S").time(), key=f"sv_{s_d}_{s_i}")
+            ev = c2.time_input("יציאה", value=datetime.strptime(str(curr_r['end_time'])[:8], "%H:%M:%S").time(), key=f"ev_{s_d}_{s_i}")
+        nn = st.text_input("הערה", value=curr_r['notes'], key=f"nn_{s_d}_{s_i}")
+        if st.button("💾 שמור שינויים", type="primary", use_container_width=True, key=f"bs_{s_d}_{s_i}"):
+            df.loc[curr_r['index'], ['type', 'start_time', 'end_time', 'notes']] = [nt, str(sv), str(ev), nn]
             update_google_sheet(df)
-        if st.button("🗑️ מחק", use_container_width=True, key=f"bdel_{s_date}_{s_idx}"):
-            update_google_sheet(df.drop(curr['index']))
+        if st.button("🗑️ מחק", use_container_width=True, key=f"bd_{s_d}_{s_i}"):
+            update_google_sheet(df.drop(curr_r['index']))
