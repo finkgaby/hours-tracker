@@ -298,7 +298,7 @@ with tab_manage:
         st.info("אין נתונים להצגה")
     else:
         st.subheader("🛠️ ניהול ועריכה")
-        d_list = sorted(df['date'].unique(), reverse=True)
+        d_list = sorted(df['date'].unique())
         s_date = st.selectbox("בחר תאריך לעריכה/מחיקה", d_list, 
                              format_func=lambda x: datetime.strptime(x, '%Y-%m-%d').strftime('%d/%m/%Y'),
                              key="manage_date_selector")
