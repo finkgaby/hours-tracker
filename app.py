@@ -88,7 +88,7 @@ def float_to_time_str(hf):
 def get_target_hours(dt):
     wd = dt.weekday()
     # ראשון-רביעי (0-3): 9 שעות, חמישי (4): 8.5 שעות
-    return 9.0 if wd in [0, 1, 2, 3] else (8.5 if wd == 4 else 0.0)
+    return 9.0 if wd in [6, 0, 1, 2] else (8.5 if wd == 3 else 0.0)
 
 def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
@@ -190,12 +190,14 @@ with tab_stats:
                 s_t = datetime.strptime(f"{clicked_date} {r['start_time']}", "%Y-%m-%d %H:%M:%S")
                 e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
                 actual_hrs = (e_t - s_t).total_seconds() / 3600
-                diff = actual_hrs - target
+                diff = actual_hrs - target # כאן התיקון: מחשבים הפרש יחסי לתקן
                 
-                if diff < 0:
-                    diff_text = f" | 🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
-                elif diff > 0:
-                    diff_text = f" | 🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
+                # הצגה רק אם יש הפרש משמעותי (מעל דקה)
+                if abs(diff) > (1/60): 
+                    if diff < 0:
+                        diff_text = f" | 🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
+                    elif diff > 0:
+                        diff_text = f" | 🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
             
             st.markdown(f"""
             <div class="selected-date-info">
