@@ -49,7 +49,7 @@ st.markdown("""
 
 st.title("⏱️ מערכת דיווח שעות")
 
-# --- טעינת נתונים (Cache מבוקר למניעת שגיאת 429) ---
+# --- טעינת נתונים ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
@@ -88,7 +88,8 @@ def float_to_time_str(hf):
 
 def get_target_hours(dt):
     wd = dt.weekday()
-    # ראשון-רביעי (0-3): 9 שעות, חמישי (4): 8.5 שעות
+    # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    # ראשון-רביעי: 9 שעות, חמישי: 8.5 שעות
     return 9.0 if wd in [6, 0, 1, 2] else (8.5 if wd == 3 else 0.0)
 
 def get_status_card(label, diff_val):
@@ -107,15 +108,24 @@ def update_google_sheet(new_df, rerun=True):
 
 def render_metrics_and_nav(suffix):
     year, month = st.session_state.view_year, st.session_state.view_month
+    today_dt = date.today()
+    
+    # חישובי תקן
     m_target = sum(get_target_hours(date(year, month, d)) for d in range(1, cal_lib.monthrange(year, month)[1] + 1))
     
-    today_dt = date.today()
+    target_until_today = 0.0
+    if year < today_dt.year or (year == today_dt.year and month < today_dt.month):
+        target_until_today = m_target
+    elif year == today_dt.year and month == today_dt.month:
+        target_until_today = sum(get_target_hours(date(year, month, d)) for d in range(1, today_dt.day + 1))
+    
     sun_curr = today_dt - timedelta(days=(today_dt.weekday() + 1) % 7)
     sat_curr = sun_curr + timedelta(days=6)
     w_target = sum(get_target_hours(sun_curr + timedelta(days=i)) for i in range(7))
 
-    done_m, done_w = 0.0, 0.0
+    done_m, done_w, done_until_today = 0.0, 0.0, 0.0
     events = []
+    
     for _, row in df.iterrows():
         try:
             dt_obj = datetime.strptime(row['date'], '%Y-%m-%d')
@@ -129,29 +139,45 @@ def render_metrics_and_nav(suffix):
                 ev_title = f"{int(hrs)}:{int((hrs%1)*60):02d}"
             elif row_t == 'שבתון':
                 hrs, ev_color, ev_title = 0.0, "#6f42c1", "שבתון"
-                if dt_obj.year == year and dt_obj.month == month: m_target -= get_target_hours(dt_obj)
-                if str(sun_curr) <= row['date'] <= str(sat_curr): w_target -= get_target_hours(dt_obj)
+                if dt_obj.year == year and dt_obj.month == month: 
+                    m_target -= get_target_hours(dt_obj)
+                    if dt_obj.date() <= today_dt: target_until_today -= get_target_hours(dt_obj)
+                if sun_curr <= dt_obj.date() <= sat_curr: w_target -= get_target_hours(dt_obj)
             else:
                 hrs, ev_color, ev_title = get_target_hours(dt_obj), ("#007bff" if row_t == 'חופשה' else "#fd7e14"), row_t
 
-            if dt_obj.year == year and dt_obj.month == month: done_m += hrs
-            if str(sun_curr) <= row['date'] <= str(sat_curr): done_w += hrs
+            if dt_obj.year == year and dt_obj.month == month: 
+                done_m += hrs
+                if dt_obj.date() <= today_dt: done_until_today += hrs
+            if sun_curr <= dt_obj.date() <= sat_curr: done_w += hrs
+            
             events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color, "id": row['date']})
         except: continue
 
     st.markdown(f"### 🗓️ סיכום עבור {month}/{year}")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("📋 תקן חודשי", f"{int(m_target)}:{int((m_target%1)*60):02d}")
-    c2.metric("✅ בוצע חודש", f"{int(done_m)}:{int((done_m%1)*60):02d}")
-    with c3: st.markdown(get_status_card("⚖️ מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
     
-    st.divider()
-    w1, w2, w3 = st.columns(3)
-    w1.metric("📊 תקן שבועי", f"{int(w_target)}:{int((w_target%1)*60):02d}")
-    w2.metric("⏱️ בוצע שבוע", f"{int(done_w)}:{int((done_w%1)*60):02d}")
-    with w3: st.markdown(get_status_card("⚖️ מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
+    # שורה ראשונה: מאזנים
+    st.markdown("#### ⚖️ שורת מאזנים")
+    m_col1, m_col2, m_col3 = st.columns(3)
+    with m_col1: st.markdown(get_status_card("מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
+    with m_col2: st.markdown(get_status_card("מאזן עד היום", done_until_today - target_until_today), unsafe_allow_html=True)
+    with m_col3: st.markdown(get_status_card("מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
+    
+    # שורה שנייה: תקנים
+    st.markdown("#### 📋 שורת תקנים")
+    t1, t2, t3 = st.columns(3)
+    t1.metric("תקן חודשי", float_to_time_str(m_target).replace('+', ''))
+    t2.metric("תקן עד היום", float_to_time_str(target_until_today).replace('+', ''))
+    t3.metric("תקן שבועי", float_to_time_str(w_target).replace('+', ''))
+    
+    # שורה שלישית: ביצוע (הוסר 'בוצע עד היום' מחמת כפילות)
+    st.markdown("#### ✅ שורת ביצוע")
+    b1, b2 = st.columns(2)
+    b1.metric("בוצע החודש", float_to_time_str(done_m).replace('+', ''))
+    b2.metric("בוצע השבוע", float_to_time_str(done_w).replace('+', ''))
 
     st.divider()
+    # כפתורי ניווט
     col_nav, _ = st.columns([0.4, 0.6])
     with col_nav:
         sub1, sub2, sub3 = st.columns(3)
@@ -161,7 +187,7 @@ def render_metrics_and_nav(suffix):
             else: st.session_state.view_month -= 1
             st.rerun()
         if sub2.button("היום", key=f"t_{suffix}"):
-            st.session_state.view_month, st.session_state.view_year = datetime.now().month, datetime.now().year
+            st.session_state.view_month, st.session_state.view_year = today_dt.month, today_dt.year
             st.rerun()
         if sub3.button("הבא", key=f"n_{suffix}"):
             if st.session_state.view_month == 12:
@@ -170,7 +196,7 @@ def render_metrics_and_nav(suffix):
             st.rerun()
     return events
 
-# --- טאבים ---
+# --- טאבים (ללא שינוי) ---
 tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים", "📋 פירוט", "📝 דיווח", "🛠️ ניהול"])
 
 with tab_stats:
@@ -191,14 +217,12 @@ with tab_stats:
                 e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
                 actual_hrs = (e_t - s_t).total_seconds() / 3600
                 diff = actual_hrs - target
-                
                 if abs(diff) > (1/60): 
                     if diff < 0:
                         diff_text = f"🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
                     elif diff > 0:
                         diff_text = f"🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
             
-            # הצגת המידע בשורות נפרדות
             st.markdown(f"""
             <div class="selected-date-info">
                 <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong><br>
@@ -245,7 +269,7 @@ with tab_report:
                     return v.strftime('%H:%M:00') if isinstance(v, time) else pd.to_datetime(v).strftime('%H:%M:00')
                 entries.append({"date": curr_d, "start_time": t_to_s(row['משעה']), "end_time": t_to_s(row.get('עד שעה', '00:00:00')), "notes": str(row.get('תיאור', '')), "type": "עבודה"})
             update_google_sheet(pd.concat([df[~df['date'].isin([e['date'] for e in entries])], pd.DataFrame(entries)], ignore_index=True), rerun=False)
-            stxt.empty(); pb.empty(); st.balloons(); st.success("✅ בוצע!"); time_lib.sleep(3); st.rerun()
+            stxt.empty(); pb.empty(); st.balloons(); st.balloons(); st.success("✅ בוצע!"); time_lib.sleep(3); st.rerun()
 
 with tab_manage:
     if not df.empty:
