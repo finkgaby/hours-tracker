@@ -42,6 +42,7 @@ st.markdown("""
         border-radius: 10px;
         border-right: 5px solid #ff7675;
         margin-top: 10px;
+        line-height: 1.6;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -184,26 +185,26 @@ with tab_stats:
             dt_obj = datetime.strptime(clicked_date, '%Y-%m-%d')
             target = get_target_hours(dt_obj)
             
-            # חישוב חסר/עודף
             diff_text = ""
             if r['type'] == 'עבודה':
                 s_t = datetime.strptime(f"{clicked_date} {r['start_time']}", "%Y-%m-%d %H:%M:%S")
                 e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
                 actual_hrs = (e_t - s_t).total_seconds() / 3600
-                diff = actual_hrs - target # כאן התיקון: מחשבים הפרש יחסי לתקן
+                diff = actual_hrs - target
                 
-                # הצגה רק אם יש הפרש משמעותי (מעל דקה)
                 if abs(diff) > (1/60): 
                     if diff < 0:
-                        diff_text = f" | 🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
+                        diff_text = f"🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
                     elif diff > 0:
-                        diff_text = f" | 🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
+                        diff_text = f"🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
             
+            # הצגת המידע בשורות נפרדות
             st.markdown(f"""
             <div class="selected-date-info">
-                <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong>{diff_text}<br>
+                <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong><br>
                 🕒 כניסה: {format_time_display(r['start_time'])} | 🕒 יציאה: {format_time_display(r['end_time'])}<br>
-                💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}
+                💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}<br>
+                {f'{diff_text}' if diff_text else ''}
             </div>
             """, unsafe_allow_html=True)
 
