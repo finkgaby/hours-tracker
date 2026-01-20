@@ -36,7 +36,6 @@ st.markdown("""
     }
     th, td { text-align: right !important; padding: 8px !important; border-bottom: 1px solid #f0f2f6 !important; }
     
-    /* עיצוב לפרטי אירוע נבחר */
     .selected-date-info {
         background-color: #f8f9fa;
         padding: 15px;
@@ -54,7 +53,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        # ttl=600 שומר נתונים ל-10 דקות ומונע רענון אינסופי
         existing_data = conn.read(worksheet="Sheet1", ttl=600)
         df = pd.DataFrame(existing_data)
         if not df.empty:
@@ -89,7 +87,8 @@ def float_to_time_str(hf):
 
 def get_target_hours(dt):
     wd = dt.weekday()
-    return 8.5 if wd == 3 else (0.0 if wd in [4, 5] else 9.0)
+    # ראשון-רביעי (0-3): 9 שעות, חמישי (4): 8.5 שעות
+    return 9.0 if wd in [0, 1, 2, 3] else (8.5 if wd == 4 else 0.0)
 
 def get_status_card(label, diff_val):
     color = "#f39c12" if diff_val > 0 else ("#ff4b4b" if diff_val < 0 else "#28a745")
@@ -136,7 +135,6 @@ def render_metrics_and_nav(suffix):
 
             if dt_obj.year == year and dt_obj.month == month: done_m += hrs
             if str(sun_curr) <= row['date'] <= str(sat_curr): done_w += hrs
-            # הוספת זיהוי תאריך לאירוע לצורך זיהוי בלחיצה
             events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color, "id": row['date']})
         except: continue
 
@@ -176,18 +174,32 @@ tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים",
 
 with tab_stats:
     evs = render_metrics_and_nav("stats")
-    # לכידת לחיצה על אירוע בלוח השנה
     cal_res = calendar(events=evs, options={"initialView": "dayGridMonth", "locale": "he", "direction": "rtl", "initialDate": f"{st.session_state.view_year}-{st.session_state.view_month:02d}-01", "headerToolbar": {"left": "", "center": "title", "right": ""}}, key=f"cal_{st.session_state.view_year}_{st.session_state.view_month}")
     
-    # הצגת פרטים בלחיצה
     if "eventClick" in cal_res:
         clicked_date = cal_res["eventClick"]["event"]["start"]
         row_data = df[df['date'] == clicked_date]
         if not row_data.empty:
             r = row_data.iloc[0]
+            dt_obj = datetime.strptime(clicked_date, '%Y-%m-%d')
+            target = get_target_hours(dt_obj)
+            
+            # חישוב חסר/עודף
+            diff_text = ""
+            if r['type'] == 'עבודה':
+                s_t = datetime.strptime(f"{clicked_date} {r['start_time']}", "%Y-%m-%d %H:%M:%S")
+                e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
+                actual_hrs = (e_t - s_t).total_seconds() / 3600
+                diff = actual_hrs - target
+                
+                if diff < 0:
+                    diff_text = f" | 🔴 **חסר:** {float_to_time_str(diff).replace('-', '')}"
+                elif diff > 0:
+                    diff_text = f" | 🟢 **עודף:** {float_to_time_str(diff).replace('+', '')}"
+            
             st.markdown(f"""
             <div class="selected-date-info">
-                <strong>📅 תאריך: {datetime.strptime(clicked_date, '%Y-%m-%d').strftime('%d/%m/%Y')}</strong><br>
+                <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong>{diff_text}<br>
                 🕒 כניסה: {format_time_display(r['start_time'])} | 🕒 יציאה: {format_time_display(r['end_time'])}<br>
                 💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}
             </div>
