@@ -88,8 +88,6 @@ def float_to_time_str(hf):
 
 def get_target_hours(dt):
     wd = dt.weekday()
-    # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
-    # ראשון-רביעי: 9 שעות, חמישי: 8.5 שעות
     return 9.0 if wd in [6, 0, 1, 2] else (8.5 if wd == 3 else 0.0)
 
 def get_status_card(label, diff_val):
@@ -110,7 +108,6 @@ def render_metrics_and_nav(suffix):
     year, month = st.session_state.view_year, st.session_state.view_month
     today_dt = date.today()
     
-    # חישובי תקן
     m_target = sum(get_target_hours(date(year, month, d)) for d in range(1, cal_lib.monthrange(year, month)[1] + 1))
     
     target_until_today = 0.0
@@ -156,28 +153,24 @@ def render_metrics_and_nav(suffix):
 
     st.markdown(f"### 🗓️ סיכום עבור {month}/{year}")
     
-    # שורה ראשונה: מאזנים
     st.markdown("#### ⚖️ שורת מאזנים")
     m_col1, m_col2, m_col3 = st.columns(3)
     with m_col1: st.markdown(get_status_card("מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
     with m_col2: st.markdown(get_status_card("מאזן עד היום", done_until_today - target_until_today), unsafe_allow_html=True)
     with m_col3: st.markdown(get_status_card("מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
     
-    # שורה שנייה: תקנים
     st.markdown("#### 📋 שורת תקנים")
     t1, t2, t3 = st.columns(3)
     t1.metric("תקן חודשי", float_to_time_str(m_target).replace('+', ''))
     t2.metric("תקן עד היום", float_to_time_str(target_until_today).replace('+', ''))
     t3.metric("תקן שבועי", float_to_time_str(w_target).replace('+', ''))
     
-    # שורה שלישית: ביצוע (הוסר 'בוצע עד היום' מחמת כפילות)
     st.markdown("#### ✅ שורת ביצוע")
     b1, b2 = st.columns(2)
     b1.metric("בוצע החודש", float_to_time_str(done_m).replace('+', ''))
     b2.metric("בוצע השבוע", float_to_time_str(done_w).replace('+', ''))
 
     st.divider()
-    # כפתורי ניווט
     col_nav, _ = st.columns([0.4, 0.6])
     with col_nav:
         sub1, sub2, sub3 = st.columns(3)
@@ -196,7 +189,7 @@ def render_metrics_and_nav(suffix):
             st.rerun()
     return events
 
-# --- טאבים (ללא שינוי) ---
+# --- טאבים ---
 tab_stats, tab_details, tab_report, tab_manage = st.tabs(["📊 סיכומים", "📋 פירוט", "📝 דיווח", "🛠️ ניהול"])
 
 with tab_stats:
@@ -246,10 +239,15 @@ with tab_report:
     st.subheader("📝 דיווח ידני")
     d_in = st.date_input("תאריך", date.today(), format="DD/MM/YYYY")
     r_t = st.radio("סוג", ["עבודה", "חופשה", "מחלה", "שבתון"], horizontal=True)
-    st_t, en_t = time(6,30), time(15,30)
+    
+    # איפוס שעות אם זה לא יום עבודה
     if r_t == "עבודה":
         c1, c2 = st.columns(2)
-        st_t, en_t = c1.time_input("כניסה", st_t), c2.time_input("יציאה", en_t)
+        st_t, en_t = c1.time_input("כניסה", time(6,30)), c2.time_input("יציאה", time(15,30))
+    else:
+        st_t, en_t = time(0,0), time(0,0)
+        st.info("🕒 ביום שאינו עבודה, השעות יוגדרו כ-00:00")
+        
     n_in = st.text_input("הערה", key="new_note")
     if st.button("שמור דיווח", type="primary", use_container_width=True):
         new_row = pd.DataFrame([{"date": str(d_in), "start_time": f"{st_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
@@ -269,7 +267,7 @@ with tab_report:
                     return v.strftime('%H:%M:00') if isinstance(v, time) else pd.to_datetime(v).strftime('%H:%M:00')
                 entries.append({"date": curr_d, "start_time": t_to_s(row['משעה']), "end_time": t_to_s(row.get('עד שעה', '00:00:00')), "notes": str(row.get('תיאור', '')), "type": "עבודה"})
             update_google_sheet(pd.concat([df[~df['date'].isin([e['date'] for e in entries])], pd.DataFrame(entries)], ignore_index=True), rerun=False)
-            stxt.empty(); pb.empty(); st.balloons(); st.balloons(); st.success("✅ בוצע!"); time_lib.sleep(3); st.rerun()
+            stxt.empty(); pb.empty(); st.balloons(); st.success("✅ בוצע!"); time_lib.sleep(3); st.rerun()
 
 with tab_manage:
     if not df.empty:
@@ -286,11 +284,16 @@ with tab_manage:
         st.markdown("#### עדכון")
         types = ["עבודה", "חופשה", "מחלה", "שבתון"]
         nt = st.radio("סוג", types, index=types.index(curr_r['type']), horizontal=True, key=f"nt_{s_d}")
-        sv, ev = curr_r['start_time'], curr_r['end_time']
+        
+        # איפוס שעות בעדכון אם זה לא יום עבודה
         if nt == "עבודה":
             c1, c2 = st.columns(2)
             sv = c1.time_input("כניסה", value=datetime.strptime(str(curr_r['start_time'])[:8], "%H:%M:%S").time(), key=f"sv_{s_d}")
             ev = c2.time_input("יציאה", value=datetime.strptime(str(curr_r['end_time'])[:8], "%H:%M:%S").time(), key=f"ev_{s_d}")
+        else:
+            sv, ev = time(0,0), time(0,0)
+            st.info("🕒 בעדכון ליום שאינו עבודה, השעות יאופסו ל-00:00")
+            
         nn = st.text_input("הערה", value=curr_r['notes'], key=f"nn_{s_d}")
         if st.button("💾 שמור", use_container_width=True, key=f"bs_{s_d}"):
             df.loc[curr_r['index'], ['type', 'start_time', 'end_time', 'notes']] = [nt, str(sv), str(ev), nn]
