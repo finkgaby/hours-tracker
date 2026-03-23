@@ -108,50 +108,64 @@ def render_metrics_and_nav(suffix):
     year, month = st.session_state.view_year, st.session_state.view_month
     today_dt = date.today()
     
-    # תיבת בחירה כולל היום
     include_today = st.checkbox("כולל היום", value=True, key=f"inc_today_{suffix}")
     calc_limit_date = today_dt if include_today else (today_dt - timedelta(days=1))
     
-    # 1. תקן חודשי מלא
     m_target = sum(get_target_hours(date(year, month, d)) for d in range(1, cal_lib.monthrange(year, month)[1] + 1))
     
-    # 2. תקן עד היום (MTD) - מושפע מהתיבה
     target_until_limit = 0.0
     if year < today_dt.year or (year == today_dt.year and month < today_dt.month):
         target_until_limit = m_target
     elif year == today_dt.year and month == today_dt.month:
         target_until_limit = sum(get_target_hours(date(year, month, d)) for d in range(1, calc_limit_date.day + 1)) if calc_limit_date.month == month else 0.0
     
-    # 3. תקן שבועי (תמיד שבוע מלא)
     sun_curr = today_dt - timedelta(days=(today_dt.weekday() + 1) % 7)
     sat_curr = sun_curr + timedelta(days=6)
     w_target = sum(get_target_hours(sun_curr + timedelta(days=i)) for i in range(7))
 
+    # חישוב מקדים של סך כל שעות העבודה היומיות עבור הלוח
+    daily_work_hrs = {}
+    for _, row in df.iterrows():
+        if row.get('type', 'עבודה') == 'עבודה':
+            dt_str = row['date']
+            try:
+                s_t = datetime.strptime(f"{dt_str} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
+                e_t = datetime.strptime(f"{dt_str} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
+                daily_work_hrs[dt_str] = daily_work_hrs.get(dt_str, 0.0) + (e_t - s_t).total_seconds() / 3600
+            except: pass
+
     done_m, done_w, done_until_limit = 0.0, 0.0, 0.0
     events = []
+    processed_dates_for_events = set()
+    processed_dates_for_targets = set()
     
     for _, row in df.iterrows():
         try:
-            dt_obj = datetime.strptime(row['date'], '%Y-%m-%d')
+            dt_str = row['date']
+            dt_obj = datetime.strptime(dt_str, '%Y-%m-%d')
             curr_date = dt_obj.date()
             row_t = row.get('type', 'עבודה')
             hrs = 0.0
             
+            # --- חישוב המדדים לכל שורה ---
             if row_t == 'עבודה':
-                s_t = datetime.strptime(f"{row['date']} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
-                e_t = datetime.strptime(f"{row['date']} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
+                s_t = datetime.strptime(f"{dt_str} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
+                e_t = datetime.strptime(f"{dt_str} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
                 hrs = (e_t - s_t).total_seconds() / 3600
-                ev_color = "#28a745" if (hrs >= get_target_hours(dt_obj)) else "#dc3545"
-                ev_title = f"{int(hrs)}:{int((hrs%1)*60):02d}"
             elif row_t == 'שבתון':
                 hrs = 0.0
-                ev_color, ev_title = "#6f42c1", "שבתון"
-                if curr_date.year == year and curr_date.month == month: 
-                    m_target -= get_target_hours(dt_obj)
-                    if curr_date <= calc_limit_date: target_until_limit -= get_target_hours(dt_obj)
-                if sun_curr <= curr_date <= sat_curr: w_target -= get_target_hours(dt_obj)
+                if dt_str not in processed_dates_for_targets:
+                    if curr_date.year == year and curr_date.month == month: 
+                        m_target -= get_target_hours(dt_obj)
+                        if curr_date <= calc_limit_date: target_until_limit -= get_target_hours(dt_obj)
+                    if sun_curr <= curr_date <= sat_curr: w_target -= get_target_hours(dt_obj)
+                    processed_dates_for_targets.add(dt_str)
             else:
-                hrs, ev_color, ev_title = get_target_hours(dt_obj), ("#007bff" if row_t == 'חופשה' else "#fd7e14"), row_t
+                if dt_str not in processed_dates_for_targets:
+                    hrs = get_target_hours(dt_obj)
+                    processed_dates_for_targets.add(dt_str)
+                else:
+                    hrs = 0.0
 
             if curr_date.year == year and curr_date.month == month: 
                 if curr_date <= calc_limit_date: done_m += hrs
@@ -159,24 +173,34 @@ def render_metrics_and_nav(suffix):
             if sun_curr <= curr_date <= sat_curr:
                 if curr_date <= calc_limit_date: done_w += hrs
             
-            events.append({"title": ev_title, "start": row['date'], "backgroundColor": ev_color, "borderColor": ev_color, "id": row['date']})
+            # --- יצירת הבלוק בלוח השנה (פעם אחת בלבד לכל תאריך) ---
+            if dt_str not in processed_dates_for_events:
+                if row_t == 'עבודה':
+                    total_day_hrs = daily_work_hrs.get(dt_str, hrs)
+                    ev_color = "#28a745" if (total_day_hrs >= get_target_hours(dt_obj)) else "#dc3545"
+                    ev_title = f"{int(total_day_hrs)}:{int((total_day_hrs%1)*60):02d}"
+                elif row_t == 'שבתון':
+                    ev_color, ev_title = "#6f42c1", "שבתון"
+                else:
+                    ev_color = "#007bff" if row_t == 'חופשה' else "#fd7e14"
+                    ev_title = row_t
+                
+                events.append({"title": ev_title, "start": dt_str, "backgroundColor": ev_color, "borderColor": ev_color, "id": dt_str})
+                processed_dates_for_events.add(dt_str)
         except: continue
 
     st.markdown(f"### 🗓️ סיכום עבור {month}/{year}")
     
-    # שורות המדדים
     c_m1, c_m2, c_m3 = st.columns(3)
     with c_m1: st.markdown(get_status_card("מאזן חודשי", done_m - m_target), unsafe_allow_html=True)
     with c_m2: st.markdown(get_status_card("מאזן עד היום", done_until_limit - target_until_limit), unsafe_allow_html=True)
     with c_m3: st.markdown(get_status_card("מאזן שבועי", done_w - w_target), unsafe_allow_html=True)
     
-    st.markdown("#### 📋 שורת תקנים")
     t1, t2, t3 = st.columns(3)
     t1.metric("תקן חודשי", float_to_time_str(m_target).replace('+', ''))
     t2.metric("תקן עד היום", float_to_time_str(target_until_limit).replace('+', ''))
     t3.metric("תקן שבועי", float_to_time_str(w_target).replace('+', ''))
     
-    st.markdown("#### ✅ שורת ביצוע")
     b1, b2 = st.columns(2)
     b1.metric("בוצע החודש", float_to_time_str(done_m).replace('+', ''))
     b2.metric("בוצע השבוע", float_to_time_str(done_w).replace('+', ''))
@@ -211,25 +235,38 @@ with tab_stats:
         clicked_date = cal_res["eventClick"]["event"]["start"]
         row_data = df[df['date'] == clicked_date]
         if not row_data.empty:
-            r = row_data.iloc[0]
             dt_obj = datetime.strptime(clicked_date, '%Y-%m-%d')
             target = get_target_hours(dt_obj)
+            
+            shifts_html = ""
+            total_work_hrs = 0.0
+            has_work = False
+            
+            for _, r in row_data.iterrows():
+                if r['type'] == 'עבודה':
+                    s_t = datetime.strptime(f"{clicked_date} {r['start_time']}", "%Y-%m-%d %H:%M:%S")
+                    e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
+                    hrs = (e_t - s_t).total_seconds() / 3600
+                    total_work_hrs += hrs
+                    has_work = True
+                    shifts_html += f"🕒 <strong>כניסה:</strong> {format_time_display(r['start_time'])} | <strong>יציאה:</strong> {format_time_display(r['end_time'])} <br> <span style='font-size:0.9em; color:gray;'>💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}</span><hr style='margin: 5px 0;'/>"
+                else:
+                    shifts_html += f"📌 <strong>סוג:</strong> {r['type']} <br> <span style='font-size:0.9em; color:gray;'>💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}</span><hr style='margin: 5px 0;'/>"
+
             diff_text = ""
-            if r['type'] == 'עבודה':
-                s_t = datetime.strptime(f"{clicked_date} {r['start_time']}", "%Y-%m-%d %H:%M:%S")
-                e_t = datetime.strptime(f"{clicked_date} {r['end_time']}", "%Y-%m-%d %H:%M:%S")
-                hrs = (e_t - s_t).total_seconds() / 3600
-                diff = hrs - target
+            if has_work:
+                diff = total_work_hrs - target
                 if abs(diff) > (1/60):
-                    status = "🔴 חסר" if diff < 0 else "🟢 עודף"
-                    diff_text = f"{status}: {float_to_time_str(diff).replace('-', '').replace('+', '')}"
+                    status = "🔴 חסר יומי" if diff < 0 else "🟢 עודף יומי"
+                    diff_text = f"<strong>{status}:</strong> {float_to_time_str(diff).replace('-', '').replace('+', '')}"
+                else:
+                    diff_text = "✅ <strong>הושלם תקן יומי בדיוק</strong>"
             
             st.markdown(f"""
             <div class="selected-date-info">
-                <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong><br>
-                🕒 כניסה: {format_time_display(r['start_time'])} | 🕒 יציאה: {format_time_display(r['end_time'])}<br>
-                💬 הערה: {r['notes'] if r['notes'] else 'אין הערות'}<br>
-                {diff_text}
+                <strong>📅 תאריך: {dt_obj.strftime('%d/%m/%Y')}</strong><br><br>
+                {shifts_html}
+                <div style="margin-top: 10px;">{diff_text}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -253,9 +290,15 @@ with tab_report:
     else:
         st_t, en_t = time(0,0), time(0,0)
     n_in = st.text_input("הערה", key="new_note")
+    
+    is_split = st.checkbox("פיצול (הוסף דיווח זה בנוסף לדיווחים קיימים באותו יום)")
+    
     if st.button("שמור דיווח", type="primary", use_container_width=True):
         new_row = pd.DataFrame([{"date": str(d_in), "start_time": f"{st_t}", "end_time": f"{en_t}", "notes": n_in, "type": r_t}])
-        update_google_sheet(pd.concat([df[df['date'] != str(d_in)], new_row], ignore_index=True))
+        if is_split:
+            update_google_sheet(pd.concat([df, new_row], ignore_index=True))
+        else:
+            update_google_sheet(pd.concat([df[df['date'] != str(d_in)], new_row], ignore_index=True))
 
     st.divider()
     f = st.file_uploader("📂 טעינת אקסל", type=["xlsx", "xls"])
