@@ -9,13 +9,37 @@ import time as time_lib
 # --- הגדרות עמוד ---
 st.set_page_config(page_title="מערכת דיווח שעות", page_icon="⏱️", layout="centered")
 
+# --- תפריט צד (Sidebar) לבחירת סביבת עבודה ---
+with st.sidebar:
+    st.title("⚙️ הגדרות מערכת")
+    env = st.radio("סביבת עבודה (DB):", ["ייצור (Production)", "בדיקות (Test)"])
+    if env == "ייצור (Production)":
+        WORKSHEET_NAME = "Sheet1"
+        st.success("🟢 אתה עובד על הנתונים האמיתיים (פרודקשן).")
+    else:
+        WORKSHEET_NAME = "TestSheet"
+        st.warning("🟠 אתה בסביבת בדיקות. הנתונים נשמרים בגיליון נפרד.")
+
+# --- עיצוב רקע צהוב לסביבת בדיקות ---
+if env == "בדיקות (Test)":
+    st.markdown("""
+    <style>
+        .stApp {
+            background-color: #fffde7 !important; /* צהוב פסטל בהיר */
+        }
+        header[data-testid="stHeader"] {
+            background-color: transparent !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 # ניהול Session State לניווט
 if 'view_month' not in st.session_state:
     st.session_state.view_month = datetime.now().month
 if 'view_year' not in st.session_state:
     st.session_state.view_year = datetime.now().year
 
-# --- CSS מותאם ליישור לימין ועיצוב ---
+# --- CSS מותאם ליישור לימין ועיצוב כללי ---
 st.markdown("""
 <style>
     .stApp { text-align: right; }
@@ -37,7 +61,7 @@ st.markdown("""
     th, td { text-align: right !important; padding: 8px !important; border-bottom: 1px solid #f0f2f6 !important; }
     
     .selected-date-info {
-        background-color: #f8f9fa;
+        background-color: rgba(248, 249, 250, 0.7);
         padding: 15px;
         border-radius: 10px;
         border-right: 5px solid #ff7675;
@@ -54,18 +78,23 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        existing_data = conn.read(worksheet="Sheet1", ttl=600)
+        existing_data = conn.read(worksheet=WORKSHEET_NAME, ttl=600)
         df = pd.DataFrame(existing_data)
-        if not df.empty:
+        
+        if not df.empty and 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
             df['type'] = df.get('type', 'עבודה').fillna('עבודה')
             df['start_time'] = df['start_time'].fillna("00:00:00").astype(str)
             df['end_time'] = df['end_time'].fillna("00:00:00").astype(str)
             df['notes'] = df.get('notes', '').fillna('')
-        return df
+            return df
+        else:
+            return pd.DataFrame(columns=["date", "start_time", "end_time", "notes", "type"])
     except Exception as e:
         if "429" in str(e):
             st.error("⚠️ חריגה ממכסת הבקשות לגוגל. המתן 2-3 דקות.")
+        elif "Worksheet" in str(e):
+            st.error(f"⚠️ שגיאה: לא נמצא גיליון בשם '{WORKSHEET_NAME}' ב-Google Sheets. אנא צור אותו תחילה.")
         return pd.DataFrame(columns=["date", "start_time", "end_time", "notes", "type"])
 
 df = load_data()
@@ -99,7 +128,7 @@ def get_status_card(label, diff_val):
     </div>"""
 
 def update_google_sheet(new_df, rerun=True):
-    conn.update(worksheet="Sheet1", data=new_df)
+    conn.update(worksheet=WORKSHEET_NAME, data=new_df)
     st.cache_data.clear()
     if rerun:
         st.rerun()
@@ -123,7 +152,6 @@ def render_metrics_and_nav(suffix):
     sat_curr = sun_curr + timedelta(days=6)
     w_target = sum(get_target_hours(sun_curr + timedelta(days=i)) for i in range(7))
 
-    # חישוב מקדים של סך כל שעות העבודה היומיות עבור הלוח
     daily_work_hrs = {}
     for _, row in df.iterrows():
         if row.get('type', 'עבודה') == 'עבודה':
@@ -147,7 +175,6 @@ def render_metrics_and_nav(suffix):
             row_t = row.get('type', 'עבודה')
             hrs = 0.0
             
-            # --- חישוב המדדים לכל שורה ---
             if row_t == 'עבודה':
                 s_t = datetime.strptime(f"{dt_str} {row['start_time']}", "%Y-%m-%d %H:%M:%S")
                 e_t = datetime.strptime(f"{dt_str} {row['end_time']}", "%Y-%m-%d %H:%M:%S")
@@ -173,7 +200,6 @@ def render_metrics_and_nav(suffix):
             if sun_curr <= curr_date <= sat_curr:
                 if curr_date <= calc_limit_date: done_w += hrs
             
-            # --- יצירת הבלוק בלוח השנה (פעם אחת בלבד לכל תאריך) ---
             if dt_str not in processed_dates_for_events:
                 if row_t == 'עבודה':
                     total_day_hrs = daily_work_hrs.get(dt_str, hrs)
